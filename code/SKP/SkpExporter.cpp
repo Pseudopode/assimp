@@ -1,0 +1,239 @@
+#ifndef ASSIMP_BUILD_NO_EXPORT
+#ifndef ASSIMP_BUILD_NO_SKP_EXPORTER
+
+#include "SkpExporter.h"
+#include <assimp/Bitmap.h>
+#include <assimp/fast_atof.h>
+#include <assimp/SceneCombiner.h>
+#include <assimp/StringUtils.h>
+//#include <assimp/XMLTools.h>
+#include <assimp/DefaultIOSystem.h>
+#include <assimp/IOSystem.hpp>
+#include <assimp/Exporter.hpp>
+#include <assimp/scene.h>
+
+#include <assimp/Exceptional.h>
+
+#include <SketchUpAPI/sketchup.h>
+
+#include <cassert>
+#include <ctime>
+#include <iostream>
+#include <memory>
+#include <set>
+#include <vector>
+
+using namespace Assimp;
+
+#define SU(api_function_call) {\
+SUResult su_api_result = api_function_call;\
+assert(SU_ERROR_NONE == su_api_result);\
+}\
+
+std::string GetString(const SUStringRef& string) {
+    size_t length = 0;
+    SU(SUStringGetUTF8Length(string, &length));
+    std::vector<char> buffer(length + 1);
+    size_t out_length = 0;
+    SU(SUStringGetUTF8(string, length + 1, buffer.data(), &out_length));
+    assert(out_length == length);
+    return std::string(begin(buffer), end(buffer));
+}
+
+
+namespace Assimp {
+
+const double MeterToInch = 39.3700787402;
+
+SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model, const SUTransformation& transformation) {
+
+    SUGeometryInputRef input = SU_INVALID;
+    SU(SUGeometryInputCreate(&input));
+
+    for (size_t i = 0; i < mesh->mNumVertices; i++) {
+        auto vertex = mesh->mVertices[i];
+        SUPoint3D position{ vertex.x, vertex.y, vertex.z };
+        SU(SUPoint3DTransform(&transformation, &position));
+        SU(SUGeometryInputAddVertex(input, &position));
+    }
+
+    for (size_t i = 0; i < mesh->mNumFaces; i++) {
+        auto face = mesh->mFaces[i];
+
+        SULoopInputRef loop = SU_INVALID;
+        SU(SULoopInputCreate(&loop));
+
+        for (size_t j = 0; j < face.mNumIndices; j++) {
+            size_t vertex_index = face.mIndices[j];
+            SU(SULoopInputAddVertexIndex(loop, vertex_index));
+        }
+
+        size_t face_index = 0;
+        SU(SUGeometryInputAddFace(input, &loop, &face_index));
+    }
+
+    SUComponentDefinitionRef definition = SU_INVALID;
+    SU(SUComponentDefinitionCreate(&definition));
+
+    auto name = mesh->mName;
+    SU(SUComponentDefinitionSetName(definition, name.C_Str()));
+
+    SUEntitiesRef entities = SU_INVALID;
+    SU(SUComponentDefinitionGetEntities(definition, &entities));
+
+    SU(SUEntitiesFill(entities, input, true));
+    SU(SUGeometryInputRelease(&input));
+
+    SU(SUModelAddComponentDefinitions(model, 1, &definition));
+
+    return definition;
+}
+
+void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUComponentDefinitionRef>& definitions) {
+    std::cout << "Node: " << node->mName.C_Str() << "\n";
+
+    auto tr = node->mTransformation;
+    std::cout << "  Transformation:\n";
+    std::cout << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
+    std::cout << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
+    std::cout << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
+    std::cout << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
+
+    //SUTransformation transformation{
+    //    tr.a1, tr.a2, tr.a3, tr.a4,
+    //    tr.b1, tr.b2, tr.b3, tr.b4,
+    //    tr.c1, tr.c2, tr.c3, tr.c4,
+    //    tr.d1, tr.d2, tr.d3, tr.d4,
+    //};
+
+    // TODO: Verify
+    // assimp is row-major while SketchUp is column-major
+    //const double scale = MeterToInch;
+    //SUTransformation transformation{
+    //    tr.a1, tr.b1, tr.c1, tr.d1,
+    //    tr.a2, tr.b2, tr.c2, tr.d2,
+    //    tr.a3, tr.b3, tr.c3, tr.d3,
+    //    tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
+    //};
+
+    const double scale = MeterToInch;
+    SUTransformation transformation{
+        tr.a1, tr.b1, tr.c1, tr.d1,
+        tr.a2, tr.b2, tr.c2, tr.d2,
+        tr.a3, tr.b3, tr.c3, tr.d3,
+        tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
+    };
+
+    std::cout << "  Meshes: " << node->mNumMeshes << "\n";
+    for (size_t i = 0; i < node->mNumMeshes; i++) {
+        auto mesh_index = node->mMeshes[i];
+        auto definition = definitions.at(mesh_index);
+        std::cout << "    MeshIndex: " << mesh_index << "\n";
+
+        SUComponentInstanceRef instance = SU_INVALID;
+        SU(SUComponentDefinitionCreateInstance(definition, &instance));
+        SU(SUComponentInstanceSetName(instance, node->mName.C_Str()));
+        SU(SUComponentInstanceSetTransform(instance, &transformation));
+
+        SU(SUEntitiesAddInstance(entities, instance, nullptr));
+    }
+
+    for (size_t i = 0; i < node->mNumChildren; i++) {
+        auto child = node->mChildren[i];
+        NodeToInstance(child, entities, definitions);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Worker function for exporting a scene to Collada. Prototyped and registered in Exporter.cpp
+void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem, const aiScene* pScene, const ExportProperties* /*pProperties*/) {
+    std::string path = DefaultIOSystem::absolutePath(std::string(pFile));
+    std::string file = DefaultIOSystem::completeBaseName(std::string(pFile));
+
+    std::cout << "\n";
+    std::cout << "Metadata:\n";
+    for (size_t i = 0; i < pScene->mMetaData->mNumProperties; i++) {
+        auto key = pScene->mMetaData->mKeys[i];
+        //auto value = pScene->mMetaData->mValues[i];
+        std::cout << key.C_Str() << "\n";
+    }
+    std::cout << "\n";
+
+    SUInitialize();
+
+    SUModelRef model = SU_INVALID;
+    SU(SUModelCreate(&model));
+
+    // Set model options
+
+    SUOptionsManagerRef options = SU_INVALID;
+    SU(SUModelGetOptionsManager(model, &options));
+
+    SUOptionsProviderRef unit_options = SU_INVALID;
+    SU(SUOptionsManagerGetOptionsProviderByName(options, "UnitsOptions", &unit_options));
+
+    SUTypedValueRef value = SU_INVALID;
+    SU(SUTypedValueCreate(&value));
+
+    SU(SUTypedValueSetInt32(value, 0)); // 0: Decimal
+    SU(SUOptionsProviderSetValue(unit_options, "LengthFormat", value));
+
+    SU(SUTypedValueSetInt32(value, 2)); // 2: mm, 4: m
+    SU(SUOptionsProviderSetValue(unit_options, "LengthUnit", value));
+
+    SU(SUTypedValueSetInt32(value, 1)); // 1: 0.0
+    SU(SUOptionsProviderSetValue(unit_options, "LengthPrecision", value));
+
+    SU(SUTypedValueRelease(&value));
+
+    // Set up base conversion transformation
+
+    SUTransformation scale_transformation;
+    SU(SUTransformationScale(&scale_transformation, MeterToInch));
+
+    SUPoint3D origin{ 0.0, 0.0, 0.0 };
+    SUVector3D x_axis{ -1.0, 0.0, 0.0 }; // TODO: Is negative X-Axis correct?
+    SUVector3D y_axis{ 0.0, 0.0, 1.0 };
+    SUVector3D z_axis{ 0.0, 1.0, 0.0 };
+    SUTransformation axes_transformation;
+    SU(SUTransformationSetFromPointAndAxes(&axes_transformation, &origin, &x_axis, &y_axis, &z_axis));
+
+    SUTransformation transformation;
+    SU(SUTransformationMultiply(&axes_transformation, &scale_transformation, &transformation));
+
+    // Load meshes as definitions
+
+    std::vector<SUComponentDefinitionRef> definitions;
+    for (size_t i = 0; i < pScene->mNumMeshes; i++) {
+        auto mesh = pScene->mMeshes[i];
+        auto definition = MeshToDefinition(mesh, model, transformation);
+        definitions.emplace_back(definition);
+    }
+
+    // Insert nodes as instances
+
+    SUEntitiesRef entities = SU_INVALID;
+    SU(SUModelGetEntities(model, &entities));
+    NodeToInstance(pScene->mRootNode, entities, definitions);
+
+    // Clean up coplanar faces
+
+    // TODO: This might ignore material...
+    SU(SUModelMergeCoplanarFaces(model));
+
+    // Workaround for missing persistent IDs
+
+    SU(SUModelFixErrors(model));
+
+    // Save model
+
+    SU(SUModelSaveToFile(model, pFile));
+    SU(SUModelRelease(&model));
+
+    SUTerminate();
+}
+
+} // end of namespace Assimp
+
+#endif
+#endif

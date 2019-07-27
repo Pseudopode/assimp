@@ -82,6 +82,7 @@ void GetPostProcessingStepInstanceList(std::vector< BaseProcess* >& out);
 // ------------------------------------------------------------------------------------------------
 // Exporter worker function prototypes. Should not be necessary to #ifndef them, it's just a prototype
 // do not use const, because some exporter need to convert the scene temporary
+void ExportSceneSKP(const char*, IOSystem*, const aiScene*, const ExportProperties*);
 void ExportSceneCollada(const char*,IOSystem*, const aiScene*, const ExportProperties*);
 void ExportSceneXFile(const char*,IOSystem*, const aiScene*, const ExportProperties*);
 void ExportSceneStep(const char*,IOSystem*, const aiScene*, const ExportProperties*);
@@ -108,6 +109,10 @@ void ExportAssimp2Json(const char* , IOSystem*, const aiScene* , const Assimp::E
 // global array of all export formats which Assimp supports in its current build
 Exporter::ExportFormatEntry gExporters[] =
 {
+#ifndef ASSIMP_BUILD_NO_SKP_EXPORTER
+    Exporter::ExportFormatEntry("skp", "SketchUp Model", "skp", &ExportSceneSKP),
+#endif
+
 #ifndef ASSIMP_BUILD_NO_COLLADA_EXPORTER
     Exporter::ExportFormatEntry( "collada", "COLLADA - Digital Asset Exchange Schema", "dae", &ExportSceneCollada ),
 #endif
