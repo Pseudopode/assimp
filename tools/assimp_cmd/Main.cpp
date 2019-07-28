@@ -122,6 +122,7 @@ int main (int argc, char* argv[])
 	// construct global importer and exporter instances
 	Assimp::Importer imp;
 	imp.SetPropertyBool("GLOB_MEASURE_TIME",true);
+	imp.SetPropertyBool(AI_CONFIG_IMPORT_COLLADA_USE_COLLADA_NAMES, true);
 	globalImporter = &imp;
 
 #ifndef ASSIMP_BUILD_NO_EXPORT
