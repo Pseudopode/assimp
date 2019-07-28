@@ -45,7 +45,58 @@ namespace Assimp {
 
 const double MeterToInch = 39.3700787402;
 
-SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model, const SUTransformation& transformation) {
+SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
+    SUMaterialRef material = SU_INVALID;
+    SU(SUMaterialCreate(&material));
+
+    std::cout << "Material: " << ai_material->GetName().C_Str() << "\n";
+    SU(SUMaterialSetName(material, ai_material->GetName().C_Str())); // TODO: Ensure is unique?
+
+    aiColor4D ai_color;
+    if (aiReturn_SUCCESS == ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, ai_color)) {
+        SUByte r = static_cast<SUByte>(std::round(255.0 * ai_color.r));
+        SUByte g = static_cast<SUByte>(std::round(255.0 * ai_color.g));
+        SUByte b = static_cast<SUByte>(std::round(255.0 * ai_color.b));
+        SUByte a = static_cast<SUByte>(std::round(255.0 * ai_color.a));
+        std::cout << "  aiColor: " << ai_color.r << ", " << ai_color.g << ", " << ai_color.b << ", " << ai_color.a << "\n";
+        std::cout << "  SUColor: " << unsigned(r) << ", " << unsigned(g) << ", " << unsigned(b) << ", " << unsigned(a) << "\n";
+
+        SUColor color{ r, g, b, a };
+        SU(SUMaterialSetColor(material, &color));
+    }
+
+    ai_real opacity;
+    if (aiReturn_SUCCESS == ai_material->Get(AI_MATKEY_OPACITY, opacity)) {
+        // TODO: SUMaterialSetUseOpacity ?
+        SU(SUMaterialSetOpacity(material, opacity));
+    }
+
+    if (ai_material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+        aiString ai_path;
+        aiTextureMapping ai_mapping; // Handle only aiTextureMapping_UV
+        aiTextureMapMode ai_mode; // Handle only aiTextureMapMode_Wrap
+        auto result = ai_material->GetTexture(aiTextureType_DIFFUSE, 0,
+            &ai_path, &ai_mapping, nullptr, nullptr, nullptr, &ai_mode);
+        assert(result == aiReturn_SUCCESS);
+        assert(ai_mapping == aiTextureMapping_UV);
+        assert(ai_mode == aiTextureMapMode_Wrap);
+        std::cout << "  Texture: " << ai_path.C_Str() << "\n";
+
+        double scale_s = 1.0;
+        double scale_t = 1.0;
+        SUTextureRef texture = SU_INVALID;
+        SU(SUTextureCreateFromFile(&texture, ai_path.C_Str(), scale_s, scale_t)); // TODO: Handle missing file.
+        SU(SUMaterialSetTexture(material, texture));
+    }
+
+    SU(SUModelAddMaterials(model, 1, &material));
+    return material;
+}
+
+SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
+    const SUTransformation& transformation, const std::vector<SUMaterialRef>& materials) {
+
+    SUMaterialRef material = materials.at(mesh->mMaterialIndex);
 
     SUGeometryInputRef input = SU_INVALID;
     SU(SUGeometryInputCreate(&input));
@@ -70,6 +121,10 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model, const 
 
         size_t face_index = 0;
         SU(SUGeometryInputAddFace(input, &loop, &face_index));
+
+        size_t num_uv_coords = 0;
+        SUMaterialInput material_input{ num_uv_coords, {}, {}, material };
+        SU(SUGeometryInputFaceSetFrontMaterial(input, face_index, &material_input));
     }
 
     SUComponentDefinitionRef definition = SU_INVALID;
@@ -78,13 +133,17 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model, const 
     auto name = mesh->mName;
     SU(SUComponentDefinitionSetName(definition, name.C_Str()));
 
+    // Add the definition to the model before populating it with geometry.
+    // Otherwise it'll lead PIDs not being generated and yield warnings when
+    // the user loads the model. When materials have been assigned to entities
+    // in the definition it all lead to random run-time crashes.
+    SU(SUModelAddComponentDefinitions(model, 1, &definition));
+
     SUEntitiesRef entities = SU_INVALID;
     SU(SUComponentDefinitionGetEntities(definition, &entities));
 
     SU(SUEntitiesFill(entities, input, true));
     SU(SUGeometryInputRelease(&input));
-
-    SU(SUModelAddComponentDefinitions(model, 1, &definition));
 
     return definition;
 }
@@ -201,12 +260,21 @@ void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem, const aiScene* pScen
     SUTransformation transformation;
     SU(SUTransformationMultiply(&axes_transformation, &scale_transformation, &transformation));
 
+    // Load materials
+
+    std::vector<SUMaterialRef> materials;
+    for (size_t i = 0; i < pScene->mNumMaterials; i++) {
+        auto ai_material = pScene->mMaterials[i];
+        auto material = LoadMaterial(ai_material, model);
+        materials.emplace_back(material);
+    }
+
     // Load meshes as definitions
 
     std::vector<SUComponentDefinitionRef> definitions;
     for (size_t i = 0; i < pScene->mNumMeshes; i++) {
         auto mesh = pScene->mMeshes[i];
-        auto definition = MeshToDefinition(mesh, model, transformation);
+        auto definition = MeshToDefinition(mesh, model, transformation, materials);
         definitions.emplace_back(definition);
     }
 
@@ -220,10 +288,6 @@ void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem, const aiScene* pScen
 
     // TODO: This might ignore material...
     SU(SUModelMergeCoplanarFaces(model));
-
-    // Workaround for missing persistent IDs
-
-    SU(SUModelFixErrors(model));
 
     // Save model
 
