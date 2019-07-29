@@ -151,6 +151,10 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
 void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUComponentDefinitionRef>& definitions) {
     std::cout << "Node: " << node->mName.C_Str() << "\n";
 
+    if (node->mNumChildren == 0 && node->mNumMeshes == 0) {
+        return;
+    }
+
     auto tr = node->mTransformation;
     std::cout << "  Transformation:\n";
     std::cout << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
@@ -199,7 +203,16 @@ void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUCo
 
     for (size_t i = 0; i < node->mNumChildren; i++) {
         auto child = node->mChildren[i];
-        NodeToInstance(child, entities, definitions);
+
+        SUGroupRef group = SU_INVALID;
+        SU(SUGroupCreate(&group));
+        SU(SUGroupSetName(group, child->mName.C_Str()));
+        SU(SUEntitiesAddGroup(entities, group));
+
+        SUEntitiesRef child_entities = SU_INVALID;
+        SU(SUGroupGetEntities(group, &child_entities));
+
+        NodeToInstance(child, child_entities, definitions);
     }
 }
 
