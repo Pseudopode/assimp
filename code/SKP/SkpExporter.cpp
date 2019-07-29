@@ -6,7 +6,6 @@
 #include <assimp/fast_atof.h>
 #include <assimp/SceneCombiner.h>
 #include <assimp/StringUtils.h>
-//#include <assimp/XMLTools.h>
 #include <assimp/DefaultIOSystem.h>
 #include <assimp/IOSystem.hpp>
 #include <assimp/Exporter.hpp>
@@ -25,6 +24,9 @@
 
 using namespace Assimp;
 
+namespace Assimp {
+namespace {
+
 #define SU(api_function_call) {\
 SUResult su_api_result = api_function_call;\
 assert(SU_ERROR_NONE == su_api_result);\
@@ -40,10 +42,8 @@ std::string GetString(const SUStringRef& string) {
     return std::string(begin(buffer), end(buffer));
 }
 
-
-namespace Assimp {
-
 const double MeterToInch = 39.3700787402;
+
 
 SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
     SUMaterialRef material = SU_INVALID;
@@ -89,14 +89,119 @@ SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
         SU(SUMaterialSetTexture(material, texture));
     }
 
-    SU(SUModelAddMaterials(model, 1, &material));
+    //SU(SUModelAddMaterials(model, 1, &material));
+    auto result = SUModelAddMaterials(model, 1, &material);
+    assert(result == SU_ERROR_NONE);
     return material;
 }
 
-SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
-    const SUTransformation& transformation, const std::vector<SUMaterialRef>& materials) {
+void SetModelOptions(SUModelRef model) {
+    SUOptionsManagerRef options = SU_INVALID;
+    SU(SUModelGetOptionsManager(model, &options));
 
-    SUMaterialRef material = materials.at(mesh->mMaterialIndex);
+    SUOptionsProviderRef unit_options = SU_INVALID;
+    SU(SUOptionsManagerGetOptionsProviderByName(options,
+        "UnitsOptions", &unit_options));
+
+    SUTypedValueRef value = SU_INVALID;
+    SU(SUTypedValueCreate(&value));
+
+    SU(SUTypedValueSetInt32(value, 0)); // 0: Decimal
+    SU(SUOptionsProviderSetValue(unit_options, "LengthFormat", value));
+
+    SU(SUTypedValueSetInt32(value, 2)); // 2: mm, 4: m
+    SU(SUOptionsProviderSetValue(unit_options, "LengthUnit", value));
+
+    SU(SUTypedValueSetInt32(value, 1)); // 1: 0.0
+    SU(SUOptionsProviderSetValue(unit_options, "LengthPrecision", value));
+
+    SU(SUTypedValueRelease(&value));
+}
+
+SUTransformation ColladaToSkpCoordinates() {
+    SUTransformation scale_transformation;
+    SU(SUTransformationScale(&scale_transformation, MeterToInch));
+
+    SUPoint3D origin{ 0.0, 0.0, 0.0 };
+    SUVector3D x_axis{ -1.0, 0.0, 0.0 }; // TODO: Is negative X-Axis correct?
+    SUVector3D y_axis{ 0.0, 0.0, 1.0 };
+    SUVector3D z_axis{ 0.0, 1.0, 0.0 };
+    SUTransformation axes_transformation;
+    SU(SUTransformationSetFromPointAndAxes(&axes_transformation,
+        &origin, &x_axis, &y_axis, &z_axis));
+
+    SUTransformation transformation;
+    SU(SUTransformationMultiply(&axes_transformation, &scale_transformation,
+        &transformation));
+
+    return transformation;
+}
+
+
+class SkpExporter {
+public:
+    SkpExporter();
+
+    void Export(const char* filepath, const aiScene* scene);
+
+private:
+    void LoadMaterials(const aiScene* scene);
+    void LoadMeshDefinitions(const aiScene* scene);
+    void LoadNodes(const aiScene* scene);
+
+    SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh);
+    void NodeToInstance(aiNode* node, SUEntitiesRef entities);
+
+    // Collada to SKP coordinate system transformation.
+    const SUTransformation transformation_{};
+
+    SUModelRef model_ = SU_INVALID;
+    std::vector<SUMaterialRef> materials_;
+    std::vector<SUComponentDefinitionRef> definitions_;
+};
+
+
+SkpExporter::SkpExporter() : transformation_(ColladaToSkpCoordinates()) {
+}
+
+void SkpExporter::Export(const char* filepath, const aiScene* scene) {
+    assert(SUIsInvalid(model_));
+    model_ = SU_INVALID;
+    SU(SUModelCreate(&model_));
+    SetModelOptions(model_);
+    LoadMaterials(scene);
+    LoadMeshDefinitions(scene);
+    LoadNodes(scene);
+    SU(SUModelMergeCoplanarFaces(model_)); // TODO: This might ignore materials...
+    SU(SUModelSaveToFile(model_, filepath));
+    SU(SUModelRelease(&model_));
+}
+
+void SkpExporter::LoadMaterials(const aiScene* scene) {
+    for (size_t i = 0; i < scene->mNumMaterials; i++) {
+        auto ai_material = scene->mMaterials[i];
+        auto material = LoadMaterial(ai_material, model_);
+        materials_.emplace_back(material);
+    }
+}
+
+void SkpExporter::LoadMeshDefinitions(const aiScene* scene) {
+    for (size_t i = 0; i < scene->mNumMeshes; i++) {
+        auto mesh = scene->mMeshes[i];
+        auto definition = MeshToDefinition(mesh);
+        definitions_.emplace_back(definition);
+    }
+}
+
+void SkpExporter::LoadNodes(const aiScene* scene) {
+    SUEntitiesRef entities = SU_INVALID;
+    SU(SUModelGetEntities(model_, &entities));
+    NodeToInstance(scene->mRootNode, entities);
+}
+
+SUComponentDefinitionRef SkpExporter::MeshToDefinition(aiMesh* mesh) {
+
+    SUMaterialRef material = materials_.at(mesh->mMaterialIndex);
 
     SUGeometryInputRef input = SU_INVALID;
     SU(SUGeometryInputCreate(&input));
@@ -104,7 +209,7 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
     for (size_t i = 0; i < mesh->mNumVertices; i++) {
         auto vertex = mesh->mVertices[i];
         SUPoint3D position{ vertex.x, vertex.y, vertex.z };
-        SU(SUPoint3DTransform(&transformation, &position));
+        SU(SUPoint3DTransform(&transformation_, &position));
         SU(SUGeometryInputAddVertex(input, &position));
     }
 
@@ -137,7 +242,7 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
     // Otherwise it'll lead PIDs not being generated and yield warnings when
     // the user loads the model. When materials have been assigned to entities
     // in the definition it all lead to random run-time crashes.
-    SU(SUModelAddComponentDefinitions(model, 1, &definition));
+    SU(SUModelAddComponentDefinitions(model_, 1, &definition));
 
     SUEntitiesRef entities = SU_INVALID;
     SU(SUComponentDefinitionGetEntities(definition, &entities));
@@ -148,7 +253,7 @@ SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh, SUModelRef model,
     return definition;
 }
 
-void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUComponentDefinitionRef>& definitions) {
+void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
     std::cout << "Node: " << node->mName.C_Str() << "\n";
 
     if (node->mNumChildren == 0 && node->mNumMeshes == 0) {
@@ -161,13 +266,6 @@ void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUCo
     std::cout << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
     std::cout << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
     std::cout << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
-
-    //SUTransformation transformation{
-    //    tr.a1, tr.a2, tr.a3, tr.a4,
-    //    tr.b1, tr.b2, tr.b3, tr.b4,
-    //    tr.c1, tr.c2, tr.c3, tr.c4,
-    //    tr.d1, tr.d2, tr.d3, tr.d4,
-    //};
 
     // TODO: Verify
     // assimp is row-major while SketchUp is column-major
@@ -184,13 +282,15 @@ void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUCo
         tr.a1, tr.b1, tr.c1, tr.d1,
         tr.a2, tr.b2, tr.c2, tr.d2,
         tr.a3, tr.b3, tr.c3, tr.d3,
+        // Beware that the Y and Z position is swapped to account for the YZ
+        // axis difference.
         tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
     };
 
     std::cout << "  Meshes: " << node->mNumMeshes << "\n";
     for (size_t i = 0; i < node->mNumMeshes; i++) {
         auto mesh_index = node->mMeshes[i];
-        auto definition = definitions.at(mesh_index);
+        auto definition = definitions_.at(mesh_index);
         std::cout << "    MeshIndex: " << mesh_index << "\n";
 
         SUComponentInstanceRef instance = SU_INVALID;
@@ -212,16 +312,19 @@ void NodeToInstance(aiNode* node, SUEntitiesRef entities, const std::vector<SUCo
         SUEntitiesRef child_entities = SU_INVALID;
         SU(SUGroupGetEntities(group, &child_entities));
 
-        NodeToInstance(child, child_entities, definitions);
+        NodeToInstance(child, child_entities);
     }
 }
 
+} // namespace
+
+
 // ------------------------------------------------------------------------------------------------
 // Worker function for exporting a scene to Collada. Prototyped and registered in Exporter.cpp
-void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem, const aiScene* pScene, const ExportProperties* /*pProperties*/) {
-    std::string path = DefaultIOSystem::absolutePath(std::string(pFile));
-    std::string file = DefaultIOSystem::completeBaseName(std::string(pFile));
+void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem,
+        const aiScene* pScene, const ExportProperties* /*pProperties*/) {
 
+    // <debug>
     std::cout << "\n";
     std::cout << "Metadata:\n";
     for (size_t i = 0; i < pScene->mMetaData->mNumProperties; i++) {
@@ -230,83 +333,13 @@ void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem, const aiScene* pScen
         std::cout << key.C_Str() << "\n";
     }
     std::cout << "\n";
+    // </debug>
 
     SUInitialize();
-
-    SUModelRef model = SU_INVALID;
-    SU(SUModelCreate(&model));
-
-    // Set model options
-
-    SUOptionsManagerRef options = SU_INVALID;
-    SU(SUModelGetOptionsManager(model, &options));
-
-    SUOptionsProviderRef unit_options = SU_INVALID;
-    SU(SUOptionsManagerGetOptionsProviderByName(options, "UnitsOptions", &unit_options));
-
-    SUTypedValueRef value = SU_INVALID;
-    SU(SUTypedValueCreate(&value));
-
-    SU(SUTypedValueSetInt32(value, 0)); // 0: Decimal
-    SU(SUOptionsProviderSetValue(unit_options, "LengthFormat", value));
-
-    SU(SUTypedValueSetInt32(value, 2)); // 2: mm, 4: m
-    SU(SUOptionsProviderSetValue(unit_options, "LengthUnit", value));
-
-    SU(SUTypedValueSetInt32(value, 1)); // 1: 0.0
-    SU(SUOptionsProviderSetValue(unit_options, "LengthPrecision", value));
-
-    SU(SUTypedValueRelease(&value));
-
-    // Set up base conversion transformation
-
-    SUTransformation scale_transformation;
-    SU(SUTransformationScale(&scale_transformation, MeterToInch));
-
-    SUPoint3D origin{ 0.0, 0.0, 0.0 };
-    SUVector3D x_axis{ -1.0, 0.0, 0.0 }; // TODO: Is negative X-Axis correct?
-    SUVector3D y_axis{ 0.0, 0.0, 1.0 };
-    SUVector3D z_axis{ 0.0, 1.0, 0.0 };
-    SUTransformation axes_transformation;
-    SU(SUTransformationSetFromPointAndAxes(&axes_transformation, &origin, &x_axis, &y_axis, &z_axis));
-
-    SUTransformation transformation;
-    SU(SUTransformationMultiply(&axes_transformation, &scale_transformation, &transformation));
-
-    // Load materials
-
-    std::vector<SUMaterialRef> materials;
-    for (size_t i = 0; i < pScene->mNumMaterials; i++) {
-        auto ai_material = pScene->mMaterials[i];
-        auto material = LoadMaterial(ai_material, model);
-        materials.emplace_back(material);
+    {
+        SkpExporter exporter;
+        exporter.Export(pFile, pScene);
     }
-
-    // Load meshes as definitions
-
-    std::vector<SUComponentDefinitionRef> definitions;
-    for (size_t i = 0; i < pScene->mNumMeshes; i++) {
-        auto mesh = pScene->mMeshes[i];
-        auto definition = MeshToDefinition(mesh, model, transformation, materials);
-        definitions.emplace_back(definition);
-    }
-
-    // Insert nodes as instances
-
-    SUEntitiesRef entities = SU_INVALID;
-    SU(SUModelGetEntities(model, &entities));
-    NodeToInstance(pScene->mRootNode, entities, definitions);
-
-    // Clean up coplanar faces
-
-    // TODO: This might ignore material...
-    SU(SUModelMergeCoplanarFaces(model));
-
-    // Save model
-
-    SU(SUModelSaveToFile(model, pFile));
-    SU(SUModelRelease(&model));
-
     SUTerminate();
 }
 
