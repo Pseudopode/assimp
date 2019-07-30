@@ -255,8 +255,8 @@ ENDMACRO()
 # ASSIMP_BUILD_XXX_EXPORTER to TRUE for each exporter
 OPTION(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT "default value of all ASSIMP_BUILD_XXX_EXPORTER values" TRUE)
 
-# macro to add the CMake Option ADD_ASSIMP_IMPORTER_<name> which enables compile of loader
-# this way selective loaders can be compiled (reduces filesize + compile time)
+# macro to add the CMake Option ADD_ASSIMP_EXPORTER_<name> which enables compile of loader
+# this way selective exporters can be compiled (reduces filesize + compile time)
 MACRO(ADD_ASSIMP_EXPORTER name)
   IF (ASSIMP_NO_EXPORT)
 	set(ASSIMP_EXPORTER_ENABLED FALSE)
@@ -707,6 +707,13 @@ ADD_ASSIMP_IMPORTER( SMD
   SMD/SMDLoader.h
 )
 
+IF (ASSIMP_BUILD_SKP_EXPORTER)
+  ADD_ASSIMP_EXPORTER( SKP
+    SKP/SkpExporter.h
+    SKP/SkpExporter.cpp
+  )
+ENDIF (ASSIMP_BUILD_SKP_EXPORTER)
+
 ADD_ASSIMP_IMPORTER( STL
   STL/STLLoader.cpp
   STL/STLLoader.h
@@ -1100,6 +1107,10 @@ IF (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
   INCLUDE_DIRECTORIES(${C4D_INCLUDES})
 ENDIF (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
 
+IF (ASSIMP_BUILD_SKP_EXPORTER)
+  INCLUDE_DIRECTORIES(${SKP_INCLUDES})
+ENDIF (ASSIMP_BUILD_SKP_EXPORTER)
+
 ADD_LIBRARY( assimp ${assimp_src} )
 ADD_LIBRARY(assimp::assimp ALIAS assimp)
 
@@ -1137,6 +1148,10 @@ IF (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
   TARGET_LINK_LIBRARIES(assimp debug ${C4D_DEBUG_LIBRARIES})
   TARGET_LINK_LIBRARIES(assimp ${C4D_EXTRA_LIBRARIES})
 ENDIF (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
+
+IF (ASSIMP_BUILD_SKP_EXPORTER)
+  TARGET_LINK_LIBRARIES(assimp ${SKP_LIBRARIES})
+ENDIF (ASSIMP_BUILD_SKP_EXPORTER)
 
 if( MSVC )
   # in order to prevent DLL hell, each of the DLLs have to be suffixed with the major version and msvc prefix

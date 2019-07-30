@@ -553,6 +553,42 @@ ELSE (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
   ADD_DEFINITIONS( -DASSIMP_BUILD_NO_C4D_IMPORTER )
 ENDIF (ASSIMP_BUILD_NONFREE_C4D_IMPORTER)
 
+# TODO:
+SET ( ASSIMP_BUILD_SKP_EXPORTER OFF CACHE BOOL
+  "Build the SKP exporter, which relies on SketchUp SDK."
+)
+
+IF (ASSIMP_BUILD_SKP_EXPORTER)
+  IF ( MSVC )
+    SET(SKP_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/contrib/SketchUpSDK/headers")
+
+    # TODO: Error for Win32. Or Skip for Win32.
+    SET(SKP_LIB_BASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/contrib/SketchUpSDK/binaries/sketchup/x64")
+
+    SET(SKP_LIBRARIES
+      "${SKP_LIB_BASE_PATH}/SketchUpAPI.lib"
+    )
+
+    set(SKP_DLLS
+      "SketchUpAPI.dll"
+      "SketchUpCommonPreferences.dll"
+    )
+    foreach( file_i ${THIRD_PARTY_DLLS})
+      add_custom_command(TARGET assimp POST_BUILD # Adds a post-build event
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${SKP_LIB_BASE_PATH}/${file_i}"
+              $<TARGET_FILE_DIR:assimp>)
+    endforeach( file_i )
+  ELSE ()
+    # TODO: Mac
+    MESSAGE( FATAL_ERROR
+      "SKP is currently only available on Windows with SketchUp SDK installed in contrib/SketchUpSDK"
+    )
+  ENDIF ( MSVC )
+ELSE (ASSIMP_BUILD_SKP_EXPORTER)
+  ADD_DEFINITIONS( -DASSIMP_BUILD_NO_SKP_EXPORTER )
+ENDIF (ASSIMP_BUILD_SKP_EXPORTER)
+
 IF(NOT HUNTER_ENABLED)
   ADD_SUBDIRECTORY(contrib)
 ENDIF(NOT HUNTER_ENABLED)
