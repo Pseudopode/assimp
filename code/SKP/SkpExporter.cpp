@@ -45,6 +45,15 @@ std::string GetString(const SUStringRef& string) {
 const double MeterToInch = 39.3700787402;
 
 
+SUVector3D ComputeNormal(const aiMesh* mesh, const aiFace& face) {
+    // Copied from GenFaceNormalsProcess.
+    const aiVector3D* pV1 = &mesh->mVertices[face.mIndices[0]];
+    const aiVector3D* pV2 = &mesh->mVertices[face.mIndices[1]];
+    const aiVector3D* pV3 = &mesh->mVertices[face.mIndices[face.mNumIndices - 1]];
+    const aiVector3D vNor = ((*pV2 - *pV1) ^ (*pV3 - *pV1)).NormalizeSafe();
+    return { vNor.x, vNor.y, vNor.z };
+}
+
 SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
     SUMaterialRef material = SU_INVALID;
     SU(SUMaterialCreate(&material));
@@ -146,15 +155,16 @@ public:
 
 private:
     void LoadMaterials(const aiScene* scene);
-    void LoadMeshDefinitions(const aiScene* scene);
+    void LoadNodeMeshes(const aiNode* node, SUEntitiesRef entities);
     void LoadNodes(const aiScene* scene);
 
-    SUComponentDefinitionRef MeshToDefinition(aiMesh* mesh);
+    void MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input);
     void NodeToInstance(aiNode* node, SUEntitiesRef entities);
 
     // Collada to SKP coordinate system transformation.
     const SUTransformation transformation_{};
 
+    const aiScene* scene_ = nullptr;
     SUModelRef model_ = SU_INVALID;
     std::vector<SUMaterialRef> materials_;
     std::vector<SUComponentDefinitionRef> definitions_;
@@ -165,12 +175,13 @@ SkpExporter::SkpExporter() : transformation_(ColladaToSkpCoordinates()) {
 }
 
 void SkpExporter::Export(const char* filepath, const aiScene* scene) {
+    assert(scene);
+    scene_ = scene;
     assert(SUIsInvalid(model_));
     model_ = SU_INVALID;
     SU(SUModelCreate(&model_));
     SetModelOptions(model_);
     LoadMaterials(scene);
-    LoadMeshDefinitions(scene);
     LoadNodes(scene);
     SU(SUModelMergeCoplanarFaces(model_)); // TODO: This might ignore materials...
     SU(SUModelSaveToFile(model_, filepath));
@@ -185,40 +196,54 @@ void SkpExporter::LoadMaterials(const aiScene* scene) {
     }
 }
 
-void SkpExporter::LoadMeshDefinitions(const aiScene* scene) {
-    for (size_t i = 0; i < scene->mNumMeshes; i++) {
-        auto mesh = scene->mMeshes[i];
-        auto definition = MeshToDefinition(mesh);
-        definitions_.emplace_back(definition);
-    }
-}
-
 void SkpExporter::LoadNodes(const aiScene* scene) {
     SUEntitiesRef entities = SU_INVALID;
     SU(SUModelGetEntities(model_, &entities));
     NodeToInstance(scene->mRootNode, entities);
 }
 
-SUVector3D ComputeNormal(const aiMesh* mesh, const aiFace& face) {
-    // Copied from GenFaceNormalsProcess.
-    const aiVector3D* pV1 = &mesh->mVertices[face.mIndices[0]];
-    const aiVector3D* pV2 = &mesh->mVertices[face.mIndices[1]];
-    const aiVector3D* pV3 = &mesh->mVertices[face.mIndices[face.mNumIndices - 1]];
-    const aiVector3D vNor = ((*pV2 - *pV1) ^ (*pV3 - *pV1)).NormalizeSafe();
-    return { vNor.x, vNor.y, vNor.z };
+void SkpExporter::LoadNodeMeshes(const aiNode* node, SUEntitiesRef entities) {
+    if (node->mNumMeshes == 0) return;
+
+    SUGeometryInputRef input = SU_INVALID;
+    SU(SUGeometryInputCreate(&input));
+
+    for (size_t i = 0; i < node->mNumMeshes; i++) {
+        auto mesh_index = node->mMeshes[i];
+        aiMesh* mesh = scene_->mMeshes[mesh_index];
+        MeshToGeometryInput(mesh, input);
+    }
+    SU(SUEntitiesFill(entities, input, true));
+
+    SU(SUGeometryInputRelease(&input));
+
+    // Fix the smooth bug in SULoopInputEdgeSetSmooth.
+    size_t num_edges = 0;
+    SU(SUEntitiesGetNumEdges(entities, false, &num_edges));
+    std::vector<SUEdgeRef> edges(num_edges, SU_INVALID);
+    SU(SUEntitiesGetEdges(entities, false, num_edges, edges.data(), &num_edges));
+    for (auto& edge : edges) {
+        bool is_soft = false;
+        SU(SUEdgeGetSoft(edge, &is_soft));
+        if (is_soft) {
+            SU(SUEdgeSetSmooth(edge, true));
+        }
+    }
 }
 
-SUComponentDefinitionRef SkpExporter::MeshToDefinition(aiMesh* mesh) {
+void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
     assert(mesh->HasFaces());
     assert(mesh->HasPositions());
     assert(mesh->HasNormals());
 
-    //std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
+    std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
+
+    size_t vertices_offset = 0, faces_offset = 0, edges_offset = 0, curves_offset = 0, arcs_offset = 0;
+    SU(SUGeometryInputGetCounts(input, &vertices_offset, &faces_offset, &edges_offset, &curves_offset, &arcs_offset));
+
+    std::cout << "  Vertex offset: " << vertices_offset << "\n";
 
     SUMaterialRef material = materials_.at(mesh->mMaterialIndex);
-
-    SUGeometryInputRef input = SU_INVALID;
-    SU(SUGeometryInputCreate(&input));
 
     for (size_t i = 0; i < mesh->mNumVertices; i++) {
         auto vertex = mesh->mVertices[i];
@@ -235,7 +260,7 @@ SUComponentDefinitionRef SkpExporter::MeshToDefinition(aiMesh* mesh) {
         SU(SULoopInputCreate(&loop));
 
         for (size_t j = 0; j < face.mNumIndices; j++) {
-            size_t vertex_index = face.mIndices[j];
+            size_t vertex_index = vertices_offset + face.mIndices[j];
             SU(SULoopInputAddVertexIndex(loop, vertex_index));
         }
 
@@ -281,39 +306,6 @@ SUComponentDefinitionRef SkpExporter::MeshToDefinition(aiMesh* mesh) {
         SUMaterialInput material_input{ num_uv_coords, {}, {}, material };
         SU(SUGeometryInputFaceSetFrontMaterial(input, face_index, &material_input));
     }
-
-    SUComponentDefinitionRef definition = SU_INVALID;
-    SU(SUComponentDefinitionCreate(&definition));
-
-    auto name = mesh->mName;
-    SU(SUComponentDefinitionSetName(definition, name.C_Str()));
-
-    // Add the definition to the model before populating it with geometry.
-    // Otherwise it'll lead PIDs not being generated and yield warnings when
-    // the user loads the model. When materials have been assigned to entities
-    // in the definition it all lead to random run-time crashes.
-    SU(SUModelAddComponentDefinitions(model_, 1, &definition));
-
-    SUEntitiesRef entities = SU_INVALID;
-    SU(SUComponentDefinitionGetEntities(definition, &entities));
-
-    SU(SUEntitiesFill(entities, input, true));
-    SU(SUGeometryInputRelease(&input));
-
-    // Fix the smooth bug in SULoopInputEdgeSetSmooth.
-    size_t num_edges = 0;
-    SU(SUEntitiesGetNumEdges(entities, false, &num_edges));
-    std::vector<SUEdgeRef> edges(num_edges, SU_INVALID);
-    SU(SUEntitiesGetEdges(entities, false, num_edges, edges.data(), &num_edges));
-    for (auto& edge : edges) {
-        bool is_soft = false;
-        SU(SUEdgeGetSoft(edge, &is_soft));
-        if (is_soft) {
-            SU(SUEdgeSetSmooth(edge, true));
-        }
-    }
-
-    return definition;
 }
 
 void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
@@ -323,53 +315,34 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
         return;
     }
 
-    auto tr = node->mTransformation;
-    std::cout << "  Transformation:\n";
-    std::cout << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
-    std::cout << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
-    std::cout << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
-    std::cout << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
-
-    // TODO: Verify
-    // assimp is row-major while SketchUp is column-major
-    //const double scale = MeterToInch;
-    //SUTransformation transformation{
-    //    tr.a1, tr.b1, tr.c1, tr.d1,
-    //    tr.a2, tr.b2, tr.c2, tr.d2,
-    //    tr.a3, tr.b3, tr.c3, tr.d3,
-    //    tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
-    //};
-
-    const double scale = MeterToInch;
-    SUTransformation transformation{
-        tr.a1, tr.b1, tr.c1, tr.d1,
-        tr.a2, tr.b2, tr.c2, tr.d2,
-        tr.a3, tr.b3, tr.c3, tr.d3,
-        // Beware that the Y and Z position is swapped to account for the YZ
-        // axis difference.
-        tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
-    };
-
     std::cout << "  Meshes: " << node->mNumMeshes << "\n";
-    for (size_t i = 0; i < node->mNumMeshes; i++) {
-        auto mesh_index = node->mMeshes[i];
-        auto definition = definitions_.at(mesh_index);
-        std::cout << "    MeshIndex: " << mesh_index << "\n";
-
-        SUComponentInstanceRef instance = SU_INVALID;
-        SU(SUComponentDefinitionCreateInstance(definition, &instance));
-        SU(SUComponentInstanceSetName(instance, node->mName.C_Str()));
-        SU(SUComponentInstanceSetTransform(instance, &transformation));
-
-        SU(SUEntitiesAddInstance(entities, instance, nullptr));
-    }
+    LoadNodeMeshes(node, entities);
 
     for (size_t i = 0; i < node->mNumChildren; i++) {
         auto child = node->mChildren[i];
 
+        auto tr = child->mTransformation;
+        //std::cout << "  Transformation:\n";
+        //std::cout << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
+        //std::cout << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
+        //std::cout << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
+        //std::cout << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
+
+        // assimp is row-major while SketchUp is column-major
+        const double scale = MeterToInch;
+        SUTransformation transformation{
+            tr.a1, tr.b1, tr.c1, tr.d1,
+            tr.a2, tr.b2, tr.c2, tr.d2,
+            tr.a3, tr.b3, tr.c3, tr.d3,
+            // Beware that the Y and Z position is swapped to account for the YZ
+            // axis difference.
+            tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
+        };
+
         SUGroupRef group = SU_INVALID;
         SU(SUGroupCreate(&group));
         SU(SUGroupSetName(group, child->mName.C_Str()));
+        SU(SUGroupSetTransform(group, &transformation));
         SU(SUEntitiesAddGroup(entities, group));
 
         SUEntitiesRef child_entities = SU_INVALID;
