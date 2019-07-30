@@ -42,7 +42,8 @@ std::string GetString(const SUStringRef& string) {
     return std::string(begin(buffer), end(buffer));
 }
 
-const double MeterToInch = 39.3700787402;
+const double MeterToInch = 39.37007874015748;
+const double MilliMeterToInch = 0.03937007874015748;
 
 
 SUVector3D ComputeNormal(const aiMesh* mesh, const aiFace& face) {
@@ -115,16 +116,122 @@ void SetModelOptions(SUModelRef model) {
     SUTypedValueRef value = SU_INVALID;
     SU(SUTypedValueCreate(&value));
 
-    SU(SUTypedValueSetInt32(value, 0)); // 0: Decimal
+    // Length Units
+
+    SU(SUTypedValueSetInt32(value, SU_LFORMAT_DECIMAL));
     SU(SUOptionsProviderSetValue(unit_options, "LengthFormat", value));
 
-    SU(SUTypedValueSetInt32(value, 2)); // 2: mm, 4: m
+    SU(SUTypedValueSetInt32(value, SU_LUNIT_METER));
     SU(SUOptionsProviderSetValue(unit_options, "LengthUnit", value));
 
-    SU(SUTypedValueSetInt32(value, 1)); // 1: 0.0
+    SU(SUTypedValueSetInt32(value, 2)); // 0.00
     SU(SUOptionsProviderSetValue(unit_options, "LengthPrecision", value));
 
+    SU(SUTypedValueSetBool(value, true));
+    SU(SUOptionsProviderSetValue(unit_options, "LengthSnapEnabled", value));
+
+    SU(SUTypedValueSetDouble(value, 10.0 * MilliMeterToInch));
+    SU(SUOptionsProviderSetValue(unit_options, "LengthSnapLength", value));
+
+    // Area Units
+    
+    SU(SUTypedValueSetInt32(value, SU_AUNIT_SQUARE_METER));
+    SU(SUOptionsProviderSetValue(unit_options, "AreaUnit", value));
+
+    // Volume Units
+
+    SU(SUTypedValueSetInt32(value, SU_VUNIT_CUBIC_METER));
+    SU(SUOptionsProviderSetValue(unit_options, "VolumeUnit", value));
+
+    // Angle Units
+
+    SU(SUTypedValueSetBool(value, true));
+    SU(SUOptionsProviderSetValue(unit_options, "AngleSnapEnabled", value));
+
+    SU(SUTypedValueSetInt32(value, 1));
+    SU(SUOptionsProviderSetValue(unit_options, "AnglePrecision", value));
+
+    SU(SUTypedValueSetDouble(value, 15.0));
+    SU(SUOptionsProviderSetValue(unit_options, "SnapAngle", value));
+
+
+    SURenderingOptionsRef rendering_options = SU_INVALID;
+    SU(SUModelGetRenderingOptions(model, &rendering_options));
+
+    // TODO: Turn off for production.
+    SU(SUTypedValueSetBool(value, true));
+    SURenderingOptionsSetValue(rendering_options, "DisplayInstanceAxes", value);
+
     SU(SUTypedValueRelease(&value));
+}
+
+void SetModelCameraIsoPerspective(SUModelRef model) {
+    SUCameraRef camera = SU_INVALID;
+    SU(SUCameraCreate(&camera));
+    SUPoint3D eye{ -3.0 * MeterToInch, -3.0 * MeterToInch, 2.0 * MeterToInch };
+    SUPoint3D target{ 0.0, 0.0, 0.5 * MeterToInch };
+    SUVector3D up{ 0.0, 0.0, 1.0 };
+    SU(SUCameraSetOrientation(camera, &eye, &target, &up));
+    SU(SUCameraSetPerspectiveFrustumFOV(camera, 35)); // degrees
+    SU(SUModelSetCamera(model, &camera));
+}
+
+void SetRenderingOptions(SURenderingOptionsRef rendering_options,
+        const char* key, bool value) {
+    SUTypedValueRef typed_value = SU_INVALID;
+    SU(SUTypedValueCreate(&typed_value));
+    SU(SUTypedValueSetBool(typed_value, value));
+    SU(SURenderingOptionsSetValue(rendering_options, key, typed_value));
+    SU(SUTypedValueRelease(&typed_value));
+}
+
+void SetRenderingOptions(SURenderingOptionsRef rendering_options,
+        const char* key, int32_t value) {
+    SUTypedValueRef typed_value = SU_INVALID;
+    SU(SUTypedValueCreate(&typed_value));
+    SU(SUTypedValueSetInt32(typed_value, value));
+    SU(SURenderingOptionsSetValue(rendering_options, key, typed_value));
+    SU(SUTypedValueRelease(&typed_value));
+}
+
+void SetRenderingOptions(SURenderingOptionsRef rendering_options,
+        const char* key, SUColor value) {
+    SUTypedValueRef typed_value = SU_INVALID;
+    SU(SUTypedValueCreate(&typed_value));
+    SU(SUTypedValueSetColor(typed_value, &value));
+    SU(SURenderingOptionsSetValue(rendering_options, key, typed_value));
+    SU(SUTypedValueRelease(&typed_value));
+}
+
+void SetModelStyle(SUModelRef model) {
+    // TODO: The SketchUp C API doesn't support all style properties :(
+    // Set the properties via RenderingOptions even though that will make the
+    // active style marked as changed.
+
+    // This is mostly replicating the "Simple Style" from SketchUp.
+
+    SURenderingOptionsRef ro = SU_INVALID;
+    SU(SUModelGetRenderingOptions(model, &ro));
+
+    SetRenderingOptions(ro, "BackgroundColor", { 153, 189, 144, 255 });
+    SetRenderingOptions(ro, "BandColor", { 0, 0, 0, 127 });
+    SetRenderingOptions(ro, "ConstructionColor", { 0, 0, 0, 255 });
+    SetRenderingOptions(ro, "FaceBackColor", { 164, 178, 187, 255 });
+    SetRenderingOptions(ro, "FaceFrontColor", { 255, 255, 255, 255 });
+    SetRenderingOptions(ro, "FogColor", { 153, 189, 144, 255 });
+    SetRenderingOptions(ro, "ForegroundColor", { 0, 0, 0, 255 });
+    SetRenderingOptions(ro, "GroundColor", { 210, 208, 185, 255 });
+    SetRenderingOptions(ro, "HighlightColor", { 0, 1, 255, 255 });
+    SetRenderingOptions(ro, "HorizonColor", { 0, 0, 0, 0 });
+    SetRenderingOptions(ro, "LockedColor", { 255, 0, 0, 255 });
+    SetRenderingOptions(ro, "SectionActiveColor", { 255, 135, 0, 255 });
+    SetRenderingOptions(ro, "SectionDefaultCutColor", { 0, 0, 0, 255 });
+    SetRenderingOptions(ro, "SectionDefaultFillColor", { 0, 0, 0, 255 });
+    SetRenderingOptions(ro, "SectionInactiveColor", { 112, 105, 97, 255 });
+    SetRenderingOptions(ro, "SkyColor", { 104, 195, 251, 255 });
+
+    SetRenderingOptions(ro, "DrawHorizon", true);
+    SetRenderingOptions(ro, "SilhouetteWidth", 2);
 }
 
 SUTransformation ColladaToSkpCoordinates() {
@@ -181,10 +288,12 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
     model_ = SU_INVALID;
     SU(SUModelCreate(&model_));
     SetModelOptions(model_);
+    SetModelStyle(model_);
+    SetModelCameraIsoPerspective(model_);
     LoadMaterials(scene);
     LoadNodes(scene);
-    SU(SUModelMergeCoplanarFaces(model_)); // TODO: This might ignore materials...
-    SU(SUModelSaveToFile(model_, filepath));
+    SU(SUModelMergeCoplanarFaces(model_));
+    SU(SUModelSaveToFile(model_, filepath)); // TODO: might be locked.
     SU(SUModelRelease(&model_));
 }
 
