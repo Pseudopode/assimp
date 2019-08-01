@@ -345,12 +345,12 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
     assert(mesh->HasPositions());
     assert(mesh->HasNormals());
 
-    std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
+    //std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
 
     size_t vertices_offset = 0, faces_offset = 0, edges_offset = 0, curves_offset = 0, arcs_offset = 0;
     SU(SUGeometryInputGetCounts(input, &vertices_offset, &faces_offset, &edges_offset, &curves_offset, &arcs_offset));
 
-    std::cout << "  Vertex offset: " << vertices_offset << "\n";
+    //std::cout << "  Vertex offset: " << vertices_offset << "\n";
 
     SUMaterialRef material = materials_.at(mesh->mMaterialIndex);
 
@@ -418,13 +418,13 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 }
 
 void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
-    std::cout << "Node: " << node->mName.C_Str() << "\n";
+    //std::cout << "Node: " << node->mName.C_Str() << "\n";
 
     if (node->mNumChildren == 0 && node->mNumMeshes == 0) {
         return;
     }
 
-    std::cout << "  Meshes: " << node->mNumMeshes << "\n";
+    //std::cout << "  Meshes: " << node->mNumMeshes << "\n";
     LoadNodeMeshes(node, entities);
 
     for (size_t i = 0; i < node->mNumChildren; i++) {
@@ -468,18 +468,6 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
 // Worker function for exporting a scene to Collada. Prototyped and registered in Exporter.cpp
 void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem,
         const aiScene* pScene, const ExportProperties* /*pProperties*/) {
-
-    // <debug>
-    std::cout << "\n";
-    std::cout << "Metadata:\n";
-    for (size_t i = 0; i < pScene->mMetaData->mNumProperties; i++) {
-        auto key = pScene->mMetaData->mKeys[i];
-        //auto value = pScene->mMetaData->mValues[i];
-        std::cout << key.C_Str() << "\n";
-    }
-    std::cout << "\n";
-    // </debug>
-
     SUInitialize();
     {
         SkpExporter exporter;
