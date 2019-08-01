@@ -568,17 +568,6 @@ IF (ASSIMP_BUILD_SKP_EXPORTER)
     SET(SKP_LIBRARIES
       "${SKP_LIB_BASE_PATH}/SketchUpAPI.lib"
     )
-
-    set(SKP_DLLS
-      "SketchUpAPI.dll"
-      "SketchUpCommonPreferences.dll"
-    )
-    foreach( file_i ${THIRD_PARTY_DLLS})
-      add_custom_command(TARGET assimp POST_BUILD # Adds a post-build event
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${SKP_LIB_BASE_PATH}/${file_i}"
-              $<TARGET_FILE_DIR:assimp>)
-    endforeach( file_i )
   ELSE ()
     # TODO: Mac
     MESSAGE( FATAL_ERROR

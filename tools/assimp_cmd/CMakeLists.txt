@@ -1,6 +1,6 @@
 # Open Asset Import Library (assimp)
 # ----------------------------------------------------------------------
-# 
+#
 # Copyright (c) 2006-2019, assimp team
 
 
@@ -66,6 +66,19 @@ IF( WIN32 )
     PRE_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:assimp> $<TARGET_FILE_DIR:assimp_cmd>
     MAIN_DEPENDENCY assimp)
+
+  IF (ASSIMP_BUILD_SKP_EXPORTER)
+    set(SKP_DLLS
+        "SketchUpAPI.dll"
+        "SketchUpCommonPreferences.dll"
+      )
+      foreach( file_i ${SKP_DLLS})
+        ADD_CUSTOM_COMMAND(TARGET assimp_cmd
+            PRE_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SKP_LIB_BASE_PATH}/${file_i}" $<TARGET_FILE_DIR:assimp_cmd>)
+      endforeach( file_i )
+  ENDIF (ASSIMP_BUILD_SKP_EXPORTER)
+
 ENDIF( WIN32 )
 
 TARGET_LINK_LIBRARIES( assimp_cmd assimp ${ZLIB_LIBRARIES} )
