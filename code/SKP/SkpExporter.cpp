@@ -15,6 +15,7 @@
 
 #include <SketchUpAPI/sketchup.h>
 
+#include <array>
 #include <cassert>
 #include <ctime>
 #include <iostream>
@@ -55,11 +56,11 @@ SUVector3D ComputeNormal(const aiMesh* mesh, const aiFace& face) {
     return { vNor.x, vNor.y, vNor.z };
 }
 
-SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
+SUMaterialRef LoadMaterial(aiMaterial* ai_material, const std::string& source_path, SUModelRef model) {
     SUMaterialRef material = SU_INVALID;
     SU(SUMaterialCreate(&material));
 
-    std::cout << "Material: " << ai_material->GetName().C_Str() << "\n";
+    //std::cout << "Material: " << ai_material->GetName().C_Str() << "\n";
     SU(SUMaterialSetName(material, ai_material->GetName().C_Str())); // TODO: Ensure is unique?
 
     aiColor4D ai_color;
@@ -68,8 +69,8 @@ SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
         SUByte g = static_cast<SUByte>(std::round(255.0 * ai_color.g));
         SUByte b = static_cast<SUByte>(std::round(255.0 * ai_color.b));
         SUByte a = static_cast<SUByte>(std::round(255.0 * ai_color.a));
-        std::cout << "  aiColor: " << ai_color.r << ", " << ai_color.g << ", " << ai_color.b << ", " << ai_color.a << "\n";
-        std::cout << "  SUColor: " << unsigned(r) << ", " << unsigned(g) << ", " << unsigned(b) << ", " << unsigned(a) << "\n";
+        //std::cout << "  aiColor: " << ai_color.r << ", " << ai_color.g << ", " << ai_color.b << ", " << ai_color.a << "\n";
+        //std::cout << "  SUColor: " << unsigned(r) << ", " << unsigned(g) << ", " << unsigned(b) << ", " << unsigned(a) << "\n";
 
         SUColor color{ r, g, b, a };
         SU(SUMaterialSetColor(material, &color));
@@ -84,24 +85,41 @@ SUMaterialRef LoadMaterial(aiMaterial* ai_material, SUModelRef model) {
     if (ai_material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
         aiString ai_path;
         aiTextureMapping ai_mapping; // Handle only aiTextureMapping_UV
-        aiTextureMapMode ai_mode; // Handle only aiTextureMapMode_Wrap
-        auto result = ai_material->GetTexture(aiTextureType_DIFFUSE, 0,
-            &ai_path, &ai_mapping, nullptr, nullptr, nullptr, &ai_mode);
-        assert(result == aiReturn_SUCCESS);
+        std::array<aiTextureMapMode, 2> ai_mode; // Handle only aiTextureMapMode_Wrap
+        auto ai_result = ai_material->GetTexture(aiTextureType_DIFFUSE, 0,
+            &ai_path, &ai_mapping, nullptr, nullptr, nullptr, ai_mode.data());
+        assert(ai_result == aiReturn_SUCCESS);
         assert(ai_mapping == aiTextureMapping_UV);
-        assert(ai_mode == aiTextureMapMode_Wrap);
-        std::cout << "  Texture: " << ai_path.C_Str() << "\n";
+        assert(ai_mode[0] == aiTextureMapMode_Wrap);
+        assert(ai_mode[1] == aiTextureMapMode_Wrap);
+        //std::cout << "  Texture: " << ai_path.C_Str() << "\n";
+
+        std::string path = ai_path.C_Str();
+
+        DefaultIOSystem filesystem;
+        if (!filesystem.Exists(path.c_str())) {
+            path = source_path + "\\" + path.c_str();
+            if (!filesystem.Exists(path.c_str())) {
+                std::cout << "Unable to located texture: " << ai_path.C_Str() <<
+                    " (Material: " << ai_material->GetName().C_Str() << ")\n";
+                std::cout << "  " << path << "\n";
+            }
+        }
 
         double scale_s = 1.0;
         double scale_t = 1.0;
         SUTextureRef texture = SU_INVALID;
-        SU(SUTextureCreateFromFile(&texture, ai_path.C_Str(), scale_s, scale_t)); // TODO: Handle missing file.
-        SU(SUMaterialSetTexture(material, texture));
+        auto result = SUTextureCreateFromFile(&texture, path.c_str(), scale_s, scale_t);
+        if (result == SU_ERROR_NONE) {
+            SU(SUMaterialSetTexture(material, texture));
+        } else {
+            std::cout << "Failed to load texture: " << ai_path.C_Str() <<
+                " (Material: " << ai_material->GetName().C_Str() << ")" <<
+                " Error: " << result << "\n";
+        }
     }
 
-    //SU(SUModelAddMaterials(model, 1, &material));
-    auto result = SUModelAddMaterials(model, 1, &material);
-    assert(result == SU_ERROR_NONE);
+    SU(SUModelAddMaterials(model, 1, &material));
     return material;
 }
 
@@ -261,7 +279,7 @@ public:
     void Export(const char* filepath, const aiScene* scene);
 
 private:
-    void LoadMaterials(const aiScene* scene);
+    void LoadMaterials(const aiScene* scene, const std::string& source_file);
     void LoadNodeMeshes(const aiNode* node, SUEntitiesRef entities);
     void LoadNodes(const aiScene* scene);
 
@@ -290,17 +308,18 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
     SetModelOptions(model_);
     SetModelStyle(model_);
     SetModelCameraIsoPerspective(model_);
-    LoadMaterials(scene);
+    LoadMaterials(scene, filepath); // TODO: This is passing the target path. Need to get the source path.
     LoadNodes(scene);
     SU(SUModelMergeCoplanarFaces(model_));
     SU(SUModelSaveToFile(model_, filepath)); // TODO: might be locked.
     SU(SUModelRelease(&model_));
 }
 
-void SkpExporter::LoadMaterials(const aiScene* scene) {
+void SkpExporter::LoadMaterials(const aiScene* scene, const std::string& source_file) {
+    auto source_path = DefaultIOSystem::absolutePath(source_file);
     for (size_t i = 0; i < scene->mNumMaterials; i++) {
         auto ai_material = scene->mMaterials[i];
-        auto material = LoadMaterial(ai_material, model_);
+        auto material = LoadMaterial(ai_material, source_path, model_);
         materials_.emplace_back(material);
     }
 }
@@ -368,8 +387,11 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
         SULoopInputRef loop = SU_INVALID;
         SU(SULoopInputCreate(&loop));
 
+        std::vector<size_t> indices;
+
         for (size_t j = 0; j < face.mNumIndices; j++) {
             size_t vertex_index = vertices_offset + face.mIndices[j];
+            indices.push_back(vertex_index);
             SU(SULoopInputAddVertexIndex(loop, vertex_index));
         }
 
@@ -411,8 +433,21 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
         size_t face_index = 0;
         SU(SUGeometryInputAddFace(input, &loop, &face_index));
 
-        size_t num_uv_coords = 0;
+        assert(mesh->mNumUVComponents[0] == 2);
+        assert(face.mNumIndices <= 4);
+
+        std::vector<SUPoint2D> uvs;
+        uvs.reserve(face.mNumIndices);
+        for (size_t j = 0; j < face.mNumIndices; j++) {
+            size_t uv_index = face.mIndices[j];
+            aiVector3D ai_uvw = mesh->mTextureCoords[0][uv_index];
+            uvs.emplace_back(SUPoint2D{ ai_uvw.x, ai_uvw.y });
+        }
+
+        size_t num_uv_coords = face.mNumIndices;
         SUMaterialInput material_input{ num_uv_coords, {}, {}, material };
+        std::copy(uvs.data(), uvs.data() + num_uv_coords, material_input.uv_coords);
+        std::copy(indices.data(), indices.data() + num_uv_coords, material_input.vertex_indices);
         SU(SUGeometryInputFaceSetFrontMaterial(input, face_index, &material_input));
     }
 }
