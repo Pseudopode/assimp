@@ -252,23 +252,84 @@ void SetModelStyle(SUModelRef model) {
     SetRenderingOptions(ro, "SilhouetteWidth", 2);
 }
 
-SUTransformation ColladaToSkpCoordinates() {
-    SUTransformation scale_transformation;
-    SU(SUTransformationScale(&scale_transformation, MeterToInch));
-
-    SUPoint3D origin{ 0.0, 0.0, 0.0 };
-    SUVector3D x_axis{ -1.0, 0.0, 0.0 }; // TODO: Is negative X-Axis correct?
-    SUVector3D y_axis{ 0.0, 0.0, 1.0 };
-    SUVector3D z_axis{ 0.0, 1.0, 0.0 };
-    SUTransformation axes_transformation;
-    SU(SUTransformationSetFromPointAndAxes(&axes_transformation,
-        &origin, &x_axis, &y_axis, &z_axis));
-
+SUTransformation MeterToInchUnits() {
     SUTransformation transformation;
-    SU(SUTransformationMultiply(&axes_transformation, &scale_transformation,
-        &transformation));
+    SU(SUTransformationScale(&transformation, MeterToInch));
+    return transformation;
+}
+
+// https://sourceforge.net/p/assimp/discussion/817654/thread/94d3a561/
+// https://stackoverflow.com/a/38679582/486990
+// https://sourceforge.net/p/assimp/discussion/817654/thread/e46db74a/
+SUTransformation YtoZaxis() {
+    SUPoint3D origin{ 0.0, 0.0, 0.0 };
+    //SUVector3D x_axis{ 1.0, 0.0, 0.0 };
+    //SUVector3D y_axis{ 0.0, 0.0, -1.0 };
+    //SUVector3D z_axis{ 0.0, 1.0, 0.0 };
+    SUVector3D x_axis{ 1.0, 0.0, 0.0 };
+    SUVector3D y_axis{ 0.0, 0.0, 1.0 };
+    SUVector3D z_axis{ 0.0, -1.0, 0.0 };
+    SUTransformation transformation;
+    SU(SUTransformationSetFromPointAndAxes(&transformation,
+        &origin, &x_axis, &y_axis, &z_axis));
+    return transformation;
+}
+
+SUTransformation ColladaToSkpCoordinates() {
+    //SUTransformation scale_transformation;
+    //SU(SUTransformationScale(&scale_transformation, MeterToInch));
+
+    //SUPoint3D origin{ 0.0, 0.0, 0.0 };
+    //SUVector3D x_axis{ 1.0, 0.0, 0.0 }; // TODO: Is negative X-Axis correct?
+    //SUVector3D y_axis{ 0.0, 0.0, 1.0 };
+    //SUVector3D z_axis{ 0.0, 1.0, 0.0 };
+    //SUTransformation axes_transformation;
+    //SU(SUTransformationSetFromPointAndAxes(&axes_transformation,
+    //    &origin, &x_axis, &y_axis, &z_axis));
+
+    //SUTransformation transformation;
+    //SU(SUTransformationMultiply(&axes_transformation, &scale_transformation,
+    //    &transformation));
+
+    ////return transformation;
+    //return scale_transformation;
+    SUTransformation tr_scale = MeterToInchUnits();
+    //auto s = MeterToInch;
+    //SUTransformation tr_s = {
+    //    s, 0, 0, 0,
+    //    0,-s, 0, 0,
+    //    0, 0, s, 0,
+    //    0, 0, 0, 1,
+    //};
+    //SUTransformation tr_s = {
+    //    1, 0, 0, 0,
+    //    0,-1, 0, 0,
+    //    0, 0, 1, 0,
+    //    0, 0, 0, 1,
+    //};
+    //SUTransformation tr_s = {
+    //   -1, 0, 0, 0,
+    //    0, 1, 0, 0,
+    //    0, 0, 1, 0,
+    //    0, 0, 0, 1,
+    //};
+    SUTransformation tr_axis = YtoZaxis();
+    SUTransformation transformation;
+    SU(SUTransformationMultiply(&tr_axis, &tr_scale, &transformation));
+    //SU(SUTransformationMultiply(&transformation, &tr_s, &transformation));
+    //SU(SUTransformationMultiply(&tr_s, &transformation, &transformation));
+    //SU(SUTransformationMultiply(&tr_scale, &tr_axis, &transformation));
+
+    //std::cout << "\n";
+    //auto t = transformation;
+    //std::cout << "  Global Transformation:\n";
+    //std::cout << "    " << t.values[0] << ", " << t.values[1] << ", " << t.values[2] << ", " << t.values[3] << "\n";
+    //std::cout << "    " << t.values[4] << ", " << t.values[5] << ", " << t.values[6] << ", " << t.values[7] << "\n";
+    //std::cout << "    " << t.values[8] << ", " << t.values[9] << ", " << t.values[10] << ", " << t.values[11] << "\n";
+    //std::cout << "    " << t.values[12] << ", " << t.values[13] << ", " << t.values[14] << ", " << t.values[15] << "\n";
 
     return transformation;
+    //return tr_scale;
 }
 
 
@@ -376,6 +437,7 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
     for (size_t i = 0; i < mesh->mNumVertices; i++) {
         auto vertex = mesh->mVertices[i];
         SUPoint3D position{ vertex.x, vertex.y, vertex.z };
+        //SUPoint3D position{ vertex.x, vertex.z, vertex.y };
         SU(SUPoint3DTransform(&transformation_, &position));
         SU(SUGeometryInputAddVertex(input, &position));
     }
@@ -453,35 +515,130 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 }
 
 void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
+    //std::cout << "\n";
     //std::cout << "Node: " << node->mName.C_Str() << "\n";
 
     if (node->mNumChildren == 0 && node->mNumMeshes == 0) {
         return;
     }
 
-    //std::cout << "  Meshes: " << node->mNumMeshes << "\n";
+    std::cout << "  Meshes: " << node->mNumMeshes << "\n";
     LoadNodeMeshes(node, entities);
 
     for (size_t i = 0; i < node->mNumChildren; i++) {
         auto child = node->mChildren[i];
 
-        auto tr = child->mTransformation;
-        //std::cout << "  Transformation:\n";
-        //std::cout << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
-        //std::cout << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
-        //std::cout << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
-        //std::cout << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
+        std::cout << "\n";
+        std::cout << "Node: " << child->mName.C_Str() << "\n";
+        std::cout << "  Meshes: " << child->mNumMeshes << "\n";
 
         // assimp is row-major while SketchUp is column-major
+        //auto tr = child->mTransformation;
+        auto tr = child->mTransformation.Transpose();
+        std::cout << "  assimp Transformation:\n";
+        std::cout << "    " << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
+        std::cout << "    " << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
+        std::cout << "    " << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
+        std::cout << "    " << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
+
         const double scale = MeterToInch;
+
+        // assimp is row-major while SketchUp is column-major
+        //SUTransformation transformation{
+        //    //tr.a1, tr.b1, tr.c1, tr.d1,
+        //    //tr.a2, tr.b2, tr.c2, tr.d2,
+        //    //tr.a3, tr.b3, tr.c3, tr.d3,
+        //    tr.a1, tr.b1, tr.c1, tr.d1,
+        //    tr.a2, tr.b2, tr.c2, tr.d2,
+        //    tr.a3, tr.b3, tr.c3, tr.d3,
+        //    // Beware that the Y and Z position is swapped to account for the YZ
+        //    // axis difference.
+        //    tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
+        //    //tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
+        //};
+
+        //SUTransformation transformation{
+        //    tr.a1, tr.a2, tr.a3, tr.d1,
+        //    tr.b1, tr.b2, tr.b3, tr.d2,
+        //    tr.c1, tr.c2, tr.c3, tr.d3,
+        //    //tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
+        //    tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
+        //};
+
+        //SUTransformation transformation{
+        //    tr.a1, tr.a2, tr.a3, tr.a4,
+        //    tr.b1, tr.b2, tr.b3, tr.b4,
+        //    tr.c1, tr.c2, tr.c3, tr.c4,
+        //    tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
+        //};
+
+        //SUTransformation transformation{
+        //   tr.a1, tr.a2, tr.a3, tr.a4,
+        //   tr.b1, tr.b2, tr.b3, tr.b4,
+        //   //-tr.b1, -tr.b2, -tr.b3, -tr.b4,
+        //   tr.c1, tr.c2, tr.c3, tr.c4,
+        //   tr.d1 * scale, -tr.d3 * scale, tr.d2 * scale, tr.d4,
+        //};
+
+        auto tr_axis = YtoZaxis();
+        //SU(SUTransformationMultiply(&tr_axis, &transformation, &transformation));
+        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
+
+        //SUPoint3D origin{ 0.0, 0.0, 0.0 };
+        //SUVector3D x_axis{ 1.0, 0.0, 0.0 };
+        //SUVector3D y_axis{ 0.0, 0.0, 1.0 };
+        //SUVector3D z_axis{ 0.0, -1.0, 0.0 };
+        //SUTransformation tr_axis;
+        //SU(SUTransformationSetFromPointAndAxes(&tr_axis,
+        //    &origin, &x_axis, &y_axis, &z_axis));
+        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
+
+
+        auto su_tr = ColladaToSkpCoordinates();
+
+        SUPoint3D pt{ tr.d1, tr.d2, tr.d3 };
+        SUPoint3DTransform(&su_tr, &pt);
+
+        // https://stackoverflow.com/a/1264880/486990
+        // This imports the DAE to be similar to the SKP master. But the Y-axis
+        // is mirrored.
+        // The Unity DAE exporter is flipping the X axis - which is throwing
+        // things off.
+        // https://github.com/mortennobel/UnityUtils/blob/master/Assets/UnityUtils/Collada/ExportToCollada.cs#L751
         SUTransformation transformation{
-            tr.a1, tr.b1, tr.c1, tr.d1,
-            tr.a2, tr.b2, tr.c2, tr.d2,
-            tr.a3, tr.b3, tr.c3, tr.d3,
-            // Beware that the Y and Z position is swapped to account for the YZ
-            // axis difference.
-            tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
+            //tr.a1, tr.a2, tr.a3, tr.a4,
+            //tr.b1, tr.b2, tr.b3, tr.b4,
+            //tr.c1, tr.c2, tr.c3, tr.c4,
+            //tr.d1, tr.d2, tr.d3, tr.d4,
+            //tr.d1, tr.d3, tr.d2, tr.d4,
+            //tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
+            tr.a1, tr.a3, tr.a2, tr.a4,
+            -tr.c1, -tr.c3, -tr.c2, -tr.c4,
+            tr.b1, tr.b3, tr.b2, tr.b4,
+            //tr.d1 * scale, -tr.d3 * scale, tr.d2 * scale, tr.d4,
+            //tr.d1 * scale, tr.d3 * scale, tr.d2 * scale, tr.d4,
+            pt.x, -pt.y, pt.z, tr.d4,
         };
+        //auto tr_scale = MeterToInchUnits();
+        //SUTransformationMultiply(&transformation, &tr_scale, &transformation);
+
+        //auto tr_axis = YtoZaxis();
+        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
+
+        //SUTransformation transformation{
+        //    tr.a1, tr.b1, tr.c1, tr.d1,
+        //    tr.a2, tr.b2, tr.c2, tr.d2,
+        //    tr.a3, tr.b3, tr.c3, tr.d3,
+        //    tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
+        //};
+
+        std::cout << "\n";
+        auto t = transformation;
+        std::cout << "  SketchUp Transformation:\n";
+        std::cout << "    " << t.values[0] << ", " << t.values[1] << ", " << t.values[2] << ", " << t.values[3] << "\n";
+        std::cout << "    " << t.values[4] << ", " << t.values[5] << ", " << t.values[6] << ", " << t.values[7] << "\n";
+        std::cout << "    " << t.values[8] << ", " << t.values[9] << ", " << t.values[10] << ", " << t.values[11] << "\n";
+        std::cout << "    " << t.values[12] << ", " << t.values[13] << ", " << t.values[14] << ", " << t.values[15] << "\n";
 
         SUGroupRef group = SU_INVALID;
         SU(SUGroupCreate(&group));
