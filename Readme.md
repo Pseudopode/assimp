@@ -1,3 +1,60 @@
+assimp with SKP export
+======================
+
+Modified version of assimp that can export to SketchUp files (.skp).
+
+This was mainly created to assist Kenney (https://www.kenney.nl/) recover lost SKP files from DAE files.
+
+Might in time clean this up and propose for a merge with main assimp repo.
+
+### Building with SKP support
+
+#### Setup the SketchUp SDK
+
+To build assimp with SKP export support you need the latest SketchUp SDK: https://extensions.sketchup.com/en/developer_center/sketchup_sdk
+
+(Need to be a registered developer, but it's free.)
+
+Extract the SketchUp SDK into the `assimp/contrib` directory in a folder named `SketchUpSDK`.
+
+Alternatively, create a symlink:
+
+```
+cd assimp/contrib
+mklink /J SketchUpSDK {SKETCHUP_SDK_PATH}\SDK_WIN_x64_2019-2-222
+```
+
+To remove the symlink:
+
+```
+rmdir SketchUpSDK
+```
+
+Or delete via Explorer. (Note that `git clean -fxd`) will not simply delete the symlink, but it will delete the content of the directory the symlink points to!)
+
+#### CMake
+
+##### Create Visual Studio Project
+
+```
+mkdir build
+cd build
+
+cmake -G "Visual Studio 16 2019" -A x64 -DASSIMP_DOUBLE_PRECISION=ON -DASSIMP_BUILD_SKP_EXPORTER=ON ..
+```
+
+Enabling `ASSIMP_DOUBLE_PRECISION` because that is what SketchUp uses.
+
+### Additional modifications
+
+This version of assimp is also set to use Collada names. See `tools/assimp_cmd/Main.cpp`:
+
+```cpp
+imp.SetPropertyBool(AI_CONFIG_IMPORT_COLLADA_USE_COLLADA_NAMES, true);
+```
+
+---
+
 Open Asset Import Library (assimp)
 ==================================
 A library to import and export various 3d-model-formats including scene-post-processing to generate missing render data.
