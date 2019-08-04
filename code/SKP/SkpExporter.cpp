@@ -33,6 +33,14 @@ SUResult su_api_result = api_function_call;\
 assert(SU_ERROR_NONE == su_api_result);\
 }\
 
+#ifdef NDEBUG
+#define SKPDUMP(expression) ((void)0)
+#define SKPLOG(expression) ((void)0)
+#else
+#define SKPDUMP(obj, title) (Dump(obj, title))
+#define SKPLOG(expression) (expression)
+#endif
+
 std::string GetString(const SUStringRef& string) {
     size_t length = 0;
     SU(SUStringGetUTF8Length(string, &length));
@@ -61,6 +69,7 @@ void Dump(const aiMatrix4x4& tr, const std::string& title) {
     std::cout << "    " << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
     std::cout << "    " << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
 }
+
 
 const double MeterToInch = 39.37007874015748;
 const double MilliMeterToInch = 0.03937007874015748;
@@ -102,11 +111,11 @@ SUTransformation ComputeMeshTransformation(const aiScene* scene) {
     //
     // We want to avoid instances carrying this unit+axis transformation and
     // instead apply the transformation to the meshes.
-    std::cout << "scene root:\n";
+    SKPLOG(std::cout << "scene root:\n");
 
     // assimp is row-major while SketchUp is column-major
     auto tr = scene->mRootNode->mTransformation.Transpose();
-    Dump(tr, "assimp Transformation");
+    SKPDUMP(tr, "assimp Transformation");
 
     const double scale = MeterToInch;
 
@@ -122,17 +131,17 @@ SUTransformation ComputeMeshTransformation(const aiScene* scene) {
         tr.c1, tr.c2, tr.c3, tr.c4,
         tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4, // TODO: correct?
     };
-    Dump(root_tr, "SketchUp Transformation");
+    SKPDUMP(root_tr, "SketchUp Transformation");
 
     // Scale it from Collada meters to SketchUp inches.
     SUTransformation scale_tr = MeterToInchTransformation();
     SU(SUTransformationMultiply(&root_tr, &scale_tr, &to_local_mesh));
-    Dump(to_local_mesh, "Scaled Transformation");
+    SKPDUMP(to_local_mesh, "Scaled Transformation");
 
     // Change from Y-up to Z-up.
     SUTransformation axis_tr = YtoZaxis();
     SU(SUTransformationMultiply(&to_local_mesh, &axis_tr, &to_local_mesh));
-    Dump(to_local_mesh, "Mesh Transformation");
+    SKPDUMP(to_local_mesh, "Mesh Transformation");
 
     return to_local_mesh;
 }
@@ -426,16 +435,10 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
     assert(mesh->HasPositions());
     assert(mesh->HasNormals());
 
-    //std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
-
     size_t vertices_offset = 0, faces_offset = 0, edges_offset = 0, curves_offset = 0, arcs_offset = 0;
     SU(SUGeometryInputGetCounts(input, &vertices_offset, &faces_offset, &edges_offset, &curves_offset, &arcs_offset));
 
-    //std::cout << "  Vertex offset: " << vertices_offset << "\n";
-
     SUMaterialRef material = materials_.at(mesh->mMaterialIndex);
-
-    SUTransformation tr_scale = MeterToInchTransformation();
 
     for (size_t i = 0; i < mesh->mNumVertices; i++) {
         auto vertex = mesh->mVertices[i];
@@ -446,7 +449,6 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 
     for (size_t i = 0; i < mesh->mNumFaces; i++) {
         auto face = mesh->mFaces[i];
-        //std::cout << "  Face: " << i << "\n";
 
         SULoopInputRef loop = SU_INVALID;
         SU(SULoopInputCreate(&loop));
@@ -538,13 +540,13 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
     for (size_t i = 0; i < node->mNumChildren; i++) {
         auto child = node->mChildren[i];
 
-        std::cout << "\n";
-        std::cout << "Node: " << child->mName.C_Str() << "\n";
-        std::cout << "  Meshes: " << child->mNumMeshes << "\n";
+        SKPLOG(std::cout << "\n");
+        SKPLOG(std::cout << "Node: " << child->mName.C_Str() << "\n");
+        SKPLOG(std::cout << "  Meshes: " << child->mNumMeshes << "\n");
 
         // assimp is row-major while SketchUp is column-major
         auto tr = child->mTransformation.Transpose();
-        Dump(tr, "assimp Transformation");
+        SKPDUMP(tr, "assimp Transformation");
 
         // https://stackoverflow.com/a/1264880/486990
         // This imports the DAE to be similar to the SKP master. But the Y-axis
@@ -594,7 +596,7 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
                 pt.x, pt.y, pt.z, tr.d4,
             };
         }
-        Dump(transformation, "SketchUp Transformation");
+        SKPDUMP(transformation, "SketchUp Transformation");
 
         assert(tr.a4 == 0.0);
         assert(tr.b4 == 0.0);
@@ -621,13 +623,6 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
 // Worker function for exporting a scene to Collada. Prototyped and registered in Exporter.cpp
 void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem,
         const aiScene* pScene, const ExportProperties* /*pProperties*/) {
-    //std::cout << "Metadata:\n";
-    //auto meta = pScene->mMetaData;
-    //for (size_t i = 0; i < meta->mNumProperties; i++) {
-    //    auto key = meta->mKeys[i];
-    //    std::cout << "  Key: " << key.C_Str() << "\n";
-    //}
-
     SUInitialize();
     {
         SkpExporter exporter;
