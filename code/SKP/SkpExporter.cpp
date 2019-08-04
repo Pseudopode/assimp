@@ -382,7 +382,8 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
     LoadMaterials(scene, filepath); // TODO: This is passing the target path. Need to get the source path.
     LoadNodes(scene);
     SU(SUModelMergeCoplanarFaces(model_));
-    SU(SUModelSaveToFile(model_, filepath)); // TODO: might be locked.
+    //SU(SUModelSaveToFile(model_, filepath)); // TODO: might be locked.
+    SU(SUModelSaveToFileWithVersion(model_, filepath, SUModelVersion_SU2015));
     SU(SUModelRelease(&model_));
 }
 
