@@ -320,7 +320,6 @@ private:
     void NodeToInstance(aiNode* node, SUEntitiesRef entities);
 
     // Collada to SKP coordinate system transformation.
-    //const SUTransformation transformation_{};
     SUTransformation transformation_{};
 
     const aiScene* scene_ = nullptr;
@@ -339,6 +338,12 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
     assert(SUIsInvalid(model_));
     model_ = SU_INVALID;
 
+    // When assimp import DAE files where the axis is not Y up, or the units
+    // are not meters, it will apply a transformation to the root node and
+    // leave the child node coordinates in place.
+    //
+    // We want to avoid instances carrying this unit+axis transformation and
+    // instead apply the transformation to the meshes.
     std::cout << "scene root:\n";
 
     // assimp is row-major while SketchUp is column-major
@@ -351,11 +356,15 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
 
     const double scale = MeterToInch;
 
+    // Get the root node transformation.
+    //
+    // If the collada file was not Y-up and not in meter-units then this
+    // transformation will adjust everything back to Y-up and meters.
     SUTransformation transformation{
         tr.a1, tr.a2, tr.a3, tr.a4,
         tr.b1, tr.b2, tr.b3, tr.b4,
         tr.c1, tr.c2, tr.c3, tr.c4,
-        tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
+        tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4, // TODO: correct?
     };
 
     std::cout << "\n";
@@ -366,10 +375,29 @@ void SkpExporter::Export(const char* filepath, const aiScene* scene) {
     std::cout << "    " << t.values[8] << ", " << t.values[9] << ", " << t.values[10] << ", " << t.values[11] << "\n";
     std::cout << "    " << t.values[12] << ", " << t.values[13] << ", " << t.values[14] << ", " << t.values[15] << "\n";
 
-    transformation_ = ColladaToSkpCoordinates();
-    //transformation_ = MeterToInchUnits();
-    SU(SUTransformationMultiply(&transformation, &transformation_, &transformation_));
-    //transformation_ = transformation;
+    // Scale it from Collada meters to SketchUp inches.
+    SUTransformation scale_tr = MeterToInchUnits();
+    SU(SUTransformationMultiply(&transformation, &scale_tr, &transformation_));
+
+    std::cout << "\n";
+    t = transformation_;
+    std::cout << "  Scaled Transformation:\n";
+    std::cout << "    " << t.values[0] << ", " << t.values[1] << ", " << t.values[2] << ", " << t.values[3] << "\n";
+    std::cout << "    " << t.values[4] << ", " << t.values[5] << ", " << t.values[6] << ", " << t.values[7] << "\n";
+    std::cout << "    " << t.values[8] << ", " << t.values[9] << ", " << t.values[10] << ", " << t.values[11] << "\n";
+    std::cout << "    " << t.values[12] << ", " << t.values[13] << ", " << t.values[14] << ", " << t.values[15] << "\n";
+
+    // Change from Y-up to Z-up.
+    SUTransformation axis_tr = YtoZaxis();
+    SU(SUTransformationMultiply(&transformation_, &axis_tr, &transformation_));
+
+    std::cout << "\n";
+    t = transformation_;
+    std::cout << "  Mesh Transformation:\n";
+    std::cout << "    " << t.values[0] << ", " << t.values[1] << ", " << t.values[2] << ", " << t.values[3] << "\n";
+    std::cout << "    " << t.values[4] << ", " << t.values[5] << ", " << t.values[6] << ", " << t.values[7] << "\n";
+    std::cout << "    " << t.values[8] << ", " << t.values[9] << ", " << t.values[10] << ", " << t.values[11] << "\n";
+    std::cout << "    " << t.values[12] << ", " << t.values[13] << ", " << t.values[14] << ", " << t.values[15] << "\n";
 
     SU(SUModelCreate(&model_));
     SetModelOptions(model_);
@@ -440,6 +468,8 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 
     SUMaterialRef material = materials_.at(mesh->mMaterialIndex);
 
+    SUTransformation tr_scale = MeterToInchUnits();
+
     for (size_t i = 0; i < mesh->mNumVertices; i++) {
         auto vertex = mesh->mVertices[i];
         SUPoint3D position{ vertex.x, vertex.y, vertex.z };
@@ -507,7 +537,8 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 
         std::vector<SUPoint2D> uvs;
         uvs.reserve(face.mNumIndices);
-        if (num_UV_components >= 2) {
+        if (num_UV_components >= 2) { // TODO: Investigate what's going on here.
+                                      //       (SKP->DAE->assimp->SKP)
             for (size_t j = 0; j < face.mNumIndices; j++) {
                 size_t uv_index = face.mIndices[j];
                 aiVector3D ai_uvw = mesh->mTextureCoords[0][uv_index];
@@ -517,7 +548,7 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
 
         size_t num_uv_coords = face.mNumIndices;
         SUMaterialInput material_input{ num_uv_coords, {}, {}, material };
-        if (num_UV_components >= 2) {
+        if (num_UV_components >= 2) { // TODO: See above
             std::copy(uvs.data(), uvs.data() + num_uv_coords, material_input.uv_coords);
             std::copy(indices.data(), indices.data() + num_uv_coords, material_input.vertex_indices);
         }
@@ -545,71 +576,12 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
         std::cout << "  Meshes: " << child->mNumMeshes << "\n";
 
         // assimp is row-major while SketchUp is column-major
-        //auto tr = child->mTransformation;
         auto tr = child->mTransformation.Transpose();
         std::cout << "  assimp Transformation:\n";
         std::cout << "    " << tr.a1 << ", " << tr.a2 << ", " << tr.a3 << ", " << tr.a4 << "\n";
         std::cout << "    " << tr.b1 << ", " << tr.b2 << ", " << tr.b3 << ", " << tr.b4 << "\n";
         std::cout << "    " << tr.c1 << ", " << tr.c2 << ", " << tr.c3 << ", " << tr.c4 << "\n";
         std::cout << "    " << tr.d1 << ", " << tr.d2 << ", " << tr.d3 << ", " << tr.d4 << "\n";
-
-        const double scale = MeterToInch;
-
-        // assimp is row-major while SketchUp is column-major
-        //SUTransformation transformation{
-        //    //tr.a1, tr.b1, tr.c1, tr.d1,
-        //    //tr.a2, tr.b2, tr.c2, tr.d2,
-        //    //tr.a3, tr.b3, tr.c3, tr.d3,
-        //    tr.a1, tr.b1, tr.c1, tr.d1,
-        //    tr.a2, tr.b2, tr.c2, tr.d2,
-        //    tr.a3, tr.b3, tr.c3, tr.d3,
-        //    // Beware that the Y and Z position is swapped to account for the YZ
-        //    // axis difference.
-        //    tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
-        //    //tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
-        //};
-
-        //SUTransformation transformation{
-        //    tr.a1, tr.a2, tr.a3, tr.d1,
-        //    tr.b1, tr.b2, tr.b3, tr.d2,
-        //    tr.c1, tr.c2, tr.c3, tr.d3,
-        //    //tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
-        //    tr.a4 * scale, tr.b4 * scale, tr.c4 * scale, tr.d4,
-        //};
-
-        //SUTransformation transformation{
-        //    tr.a1, tr.a2, tr.a3, tr.a4,
-        //    tr.b1, tr.b2, tr.b3, tr.b4,
-        //    tr.c1, tr.c2, tr.c3, tr.c4,
-        //    tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
-        //};
-
-        //SUTransformation transformation{
-        //   tr.a1, tr.a2, tr.a3, tr.a4,
-        //   tr.b1, tr.b2, tr.b3, tr.b4,
-        //   //-tr.b1, -tr.b2, -tr.b3, -tr.b4,
-        //   tr.c1, tr.c2, tr.c3, tr.c4,
-        //   tr.d1 * scale, -tr.d3 * scale, tr.d2 * scale, tr.d4,
-        //};
-
-        //auto tr_axis = YtoZaxis();
-        //SU(SUTransformationMultiply(&tr_axis, &transformation, &transformation));
-        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
-
-        //SUPoint3D origin{ 0.0, 0.0, 0.0 };
-        //SUVector3D x_axis{ 1.0, 0.0, 0.0 };
-        //SUVector3D y_axis{ 0.0, 0.0, 1.0 };
-        //SUVector3D z_axis{ 0.0, -1.0, 0.0 };
-        //SUTransformation tr_axis;
-        //SU(SUTransformationSetFromPointAndAxes(&tr_axis,
-        //    &origin, &x_axis, &y_axis, &z_axis));
-        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
-
-
-        //auto su_tr = ColladaToSkpCoordinates();
-
-        //SUPoint3D pt{ tr.d1, tr.d2, tr.d3 };
-        //SUPoint3DTransform(&transformation_, &pt);
 
         // https://stackoverflow.com/a/1264880/486990
         // This imports the DAE to be similar to the SKP master. But the Y-axis
@@ -634,61 +606,36 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
         //auto tr_scale = MeterToInchUnits();
         //SUTransformationMultiply(&transformation, &tr_scale, &transformation);
 
-        //auto tr_axis = YtoZaxis();
-        //SU(SUTransformationMultiply(&transformation, &tr_axis, &transformation));
-
-        //SUTransformation transformation{
-        //    tr.a1, tr.b1, tr.c1, tr.d1,
-        //    tr.a2, tr.b2, tr.c2, tr.d2,
-        //    tr.a3, tr.b3, tr.c3, tr.d3,
-        //    tr.a4 * scale, tr.c4 * scale, tr.b4 * scale, tr.d4,
-        //};
-
-        // !!!
-        //SUTransformation transformation{
-        //    //tr.a1, tr.a2, tr.a3, tr.a4,
-        //    //tr.b1, tr.b2, tr.b3, tr.b4,
-        //    //tr.c1, tr.c2, tr.c3, tr.c4,
-        //    //tr.d1, tr.d2, tr.d3, tr.d4,
-        //    //tr.d1, tr.d3, tr.d2, tr.d4,
-        //    //tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
-        //    //tr.a1, tr.a3, tr.a2, tr.a4,
-        //    //tr.c1, tr.c3, tr.c2, tr.c4,
-        //    //tr.b1, tr.b3, tr.b2, tr.b4,
-
-        //    tr.a1, tr.c1, tr.b1, tr.a4,
-        //    tr.a3, tr.c3, tr.b3, tr.c4,
-        //    tr.a2, tr.c2, tr.b2, tr.b4,
-
-        //    //tr.d1 * scale, -tr.d3 * scale, tr.d2 * scale, tr.d4,
-        //    //tr.d1 * scale, tr.d3 * scale, tr.d2 * scale, tr.d4,
-
-        //    //pt.x, pt.y, pt.z, tr.d4,
-        //    pt.x, pt.y, pt.z, tr.d4,
-        //};
-
-        auto tr_axis = YtoZaxis();
-        SUTransformation tr_y_to_z_inverse;
-        SU(SUTransformationGetInverse(&tr_axis, &tr_y_to_z_inverse));
-        //SU(SUTransformationMultiply(&tr_y_to_z_inverse, &transformation, &transformation));
-
         SUPoint3D pt{ tr.d1, tr.d2, tr.d3 };
         SU(SUPoint3DTransform(&transformation_, &pt));
-        //SU(SUPoint3DTransform(&tr_y_to_z_inverse, &pt));
 
-        SUTransformation transformation{
-            tr.a1, tr.a2, tr.a3, tr.a4,
-            tr.b1, tr.b2, tr.b3, tr.b4,
-            tr.c1, tr.c2, tr.c3, tr.c4,
-            //tr.d1, tr.d2, tr.d3, tr.d4,
-            pt.x, pt.y, pt.z, tr.d4,
-        };
+        // TODO: Kludge alert!
+        bool is_identity = false;
+        SU(SUTransformationIsIdentity(&transformation_, &is_identity));
+        SUTransformation transformation{};
+        if (is_identity) {
+            // DAE input was Z_UP
+            transformation = {
+                tr.a1, tr.a2, tr.a3, tr.a4,
+                tr.b1, tr.b2, tr.b3, tr.b4,
+                tr.c1, tr.c2, tr.c3, tr.c4,
+                pt.x, pt.y, pt.z, tr.d4,
+            };
+        } else {
+            // DAE input was Y_UP
+            // TODO: Kludge alert! I don't know why this works. :(
+            transformation = {
+                tr.a1, tr.c1, tr.b1, tr.a4,
+                tr.a3, tr.c3, tr.b3, tr.c4,
+                tr.a2, tr.c2, tr.b2, tr.b4,
+                pt.x, pt.y, pt.z, tr.d4,
+            };
+        }
+
         assert(tr.a4 == 0.0);
         assert(tr.b4 == 0.0);
         assert(tr.c4 == 0.0);
         assert(tr.d4 == 1.0);
-
-        //SU(SUTransformationMultiply(&transformation, &tr_y_to_z_inverse, &transformation));
 
         std::cout << "\n";
         auto t = transformation;
@@ -718,12 +665,12 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
 // Worker function for exporting a scene to Collada. Prototyped and registered in Exporter.cpp
 void ExportSceneSKP(const char* pFile, IOSystem* pIOSystem,
         const aiScene* pScene, const ExportProperties* /*pProperties*/) {
-    std::cout << "Metadata:\n";
-    auto meta = pScene->mMetaData;
-    for (size_t i = 0; i < meta->mNumProperties; i++) {
-        auto key = meta->mKeys[i];
-        std::cout << "  Key: " << key.C_Str() << "\n";
-    }
+    //std::cout << "Metadata:\n";
+    //auto meta = pScene->mMetaData;
+    //for (size_t i = 0; i < meta->mNumProperties; i++) {
+    //    auto key = meta->mKeys[i];
+    //    std::cout << "  Key: " << key.C_Str() << "\n";
+    //}
 
     SUInitialize();
     {
