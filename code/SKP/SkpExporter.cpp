@@ -548,54 +548,27 @@ void SkpExporter::NodeToInstance(aiNode* node, SUEntitiesRef entities) {
         auto tr = child->mTransformation.Transpose();
         SKPDUMP(tr, "assimp Transformation");
 
-        // https://stackoverflow.com/a/1264880/486990
-        // This imports the DAE to be similar to the SKP master. But the Y-axis
-        // is mirrored.
         // The Unity DAE exporter is flipping the X axis - which is throwing
         // things off.
         // https://github.com/mortennobel/UnityUtils/blob/master/Assets/UnityUtils/Collada/ExportToCollada.cs#L751
-        //SUTransformation transformation{
-        //    //tr.a1, tr.a2, tr.a3, tr.a4,
-        //    //tr.b1, tr.b2, tr.b3, tr.b4,
-        //    //tr.c1, tr.c2, tr.c3, tr.c4,
-        //    //tr.d1, tr.d2, tr.d3, tr.d4,
-        //    //tr.d1, tr.d3, tr.d2, tr.d4,
-        //    //tr.d1 * scale, tr.d2 * scale, tr.d3 * scale, tr.d4,
-        //    tr.a1, tr.a3, tr.a2, tr.a4,
-        //    tr.c1, tr.c3, tr.c2, tr.c4,
-        //    tr.b1, tr.b3, tr.b2, tr.b4,
-        //    //tr.d1 * scale, -tr.d3 * scale, tr.d2 * scale, tr.d4,
-        //    //tr.d1 * scale, tr.d3 * scale, tr.d2 * scale, tr.d4,
-        //    pt.x, pt.y, pt.z, tr.d4,
-        //};
-        //auto tr_scale = MeterToInchUnits();
-        //SUTransformationMultiply(&transformation, &tr_scale, &transformation);
 
-        SUPoint3D pt{ tr.d1, tr.d2, tr.d3 };
-        SU(SUPoint3DTransform(&to_local_mesh_tr_, &pt));
+        auto scale = MeterToInch;
+        SUTransformation transformation{
+            tr.a1, tr.a2, tr.a3, tr.a4,
+            tr.b1, tr.b2, tr.b3, tr.b4,
+            tr.c1, tr.c2, tr.c3, tr.c4,
+            tr.d1, tr.d2, tr.d3, tr.d4,
+        };
 
-        // TODO: Kludge alert!
-        bool is_identity = false;
-        SU(SUTransformationIsIdentity(&to_local_mesh_tr_, &is_identity));
-        SUTransformation transformation{};
-        if (is_identity) {
-            // DAE input was Z_UP
-            transformation = {
-                tr.a1, tr.a2, tr.a3, tr.a4,
-                tr.b1, tr.b2, tr.b3, tr.b4,
-                tr.c1, tr.c2, tr.c3, tr.c4,
-                pt.x, pt.y, pt.z, tr.d4,
-            };
-        } else {
-            // DAE input was Y_UP
-            // TODO: Kludge alert! I don't know why this works. :(
-            transformation = {
-                tr.a1, tr.c1, tr.b1, tr.a4,
-                tr.a3, tr.c3, tr.b3, tr.c4,
-                tr.a2, tr.c2, tr.b2, tr.b4,
-                pt.x, pt.y, pt.z, tr.d4,
-            };
-        }
+        // The mesh content has been transformed to_local_mesh_tr_inverse to
+        // make its content Z-up within the instances.
+        // Need to compensate for that in the instance transformation itself.
+        SUTransformation to_local_mesh_tr_inverse;
+        SU(SUTransformationGetInverse(&to_local_mesh_tr_, &to_local_mesh_tr_inverse));
+        // to_local_mesh_tr_ * transformation * mesh_tr_inverse
+        SU(SUTransformationMultiply(&transformation, &to_local_mesh_tr_inverse, &transformation));
+        SU(SUTransformationMultiply(&to_local_mesh_tr_, &transformation, &transformation));
+
         SKPDUMP(transformation, "SketchUp Transformation");
 
         assert(tr.a4 == 0.0);
