@@ -410,6 +410,7 @@ void SkpExporter::LoadNodeMeshes(const aiNode* node, SUEntitiesRef entities) {
     for (size_t i = 0; i < node->mNumMeshes; i++) {
         auto mesh_index = node->mMeshes[i];
         aiMesh* mesh = scene_->mMeshes[mesh_index];
+        std::cout << "Mesh: " << mesh->mName.C_Str() << "\n";
         MeshToGeometryInput(mesh, input);
     }
     SU(SUEntitiesFill(entities, input, true));
@@ -417,17 +418,17 @@ void SkpExporter::LoadNodeMeshes(const aiNode* node, SUEntitiesRef entities) {
     SU(SUGeometryInputRelease(&input));
 
     // Fix the smooth bug in SULoopInputEdgeSetSmooth.
-    size_t num_edges = 0;
-    SU(SUEntitiesGetNumEdges(entities, false, &num_edges));
-    std::vector<SUEdgeRef> edges(num_edges, SU_INVALID);
-    SU(SUEntitiesGetEdges(entities, false, num_edges, edges.data(), &num_edges));
-    for (auto& edge : edges) {
-        bool is_soft = false;
-        SU(SUEdgeGetSoft(edge, &is_soft));
-        if (is_soft) {
-            SU(SUEdgeSetSmooth(edge, true));
-        }
-    }
+    //size_t num_edges = 0;
+    //SU(SUEntitiesGetNumEdges(entities, false, &num_edges));
+    //std::vector<SUEdgeRef> edges(num_edges, SU_INVALID);
+    //SU(SUEntitiesGetEdges(entities, false, num_edges, edges.data(), &num_edges));
+    //for (auto& edge : edges) {
+    //    bool is_soft = false;
+    //    SU(SUEdgeGetSoft(edge, &is_soft));
+    //    if (is_soft) {
+    //        SU(SUEdgeSetSmooth(edge, true));
+    //    }
+    //}
 }
 
 void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
@@ -465,7 +466,7 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
         // direction as the face normal. This is the best SketchUp can do since
         // it doesn't allow explicit control over vertex normals.
         SUVector3D face_normal = ComputeNormal(mesh, face);
-        //std::cout << "    Normal: " << face_normal.x << ", " << face_normal.y << ", " << face_normal.z << "\n";
+        std::cout << "    Normal: " << face_normal.x << ", " << face_normal.y << ", " << face_normal.z << "\n";
         for (size_t j = 0; j < face.mNumIndices; j++) {
             // Get the index of the next vertex in the loop.
             size_t k = (j + 1) % face.mNumIndices;
@@ -481,18 +482,19 @@ void SkpExporter::MeshToGeometryInput(aiMesh* mesh, SUGeometryInputRef input) {
             SU(SUVector3DIsSameDirectionAs(&face_normal, &normal1, &same1));
             SU(SUVector3DIsSameDirectionAs(&face_normal, &normal2, &same2));
 
-            //std::cout << "      V1 Normal: " << normal1.x << ", " << normal1.y << ", " << normal1.z << " same: " << same1 << "\n";
-            //std::cout << "      V2 Normal: " << normal2.x << ", " << normal2.y << ", " << normal2.z << " same: " << same2 << "\n";
+            std::cout << "      V1 Normal: " << normal1.x << ", " << normal1.y << ", " << normal1.z << " same: " << std::boolalpha << same1 << "\n";
+            std::cout << "      V2 Normal: " << normal2.x << ", " << normal2.y << ", " << normal2.z << " same: " << std::boolalpha << same2 << "\n";
 
             // If either vertex normal is not in the same direction then assume
             // this edge should be soft+smooth.
             if (!same1 || !same2) {
-                //std::cout << "    Soft+Smooth edge: " << j << "\n";
+                std::cout << "    Soft+Smooth edge: " << j << "\n";
                 size_t edge_index = j;
+                // TODO: Only set if edge is connected to exactly two edges
+                // TODO: Only set if the vertex normal matches the average
+                //       of the connected two faces.
                 SU(SULoopInputEdgeSetSoft(loop, edge_index, true));
-                // TODO: SketchUp Bug! The smooth propery appear to be applied
-                //   to the whole loop instead of just the given edge index.
-                //SU(SULoopInputEdgeSetSmooth(loop, edge_index, true));
+                SU(SULoopInputEdgeSetSmooth(loop, edge_index, true));
             }
         }
 
